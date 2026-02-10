@@ -22,7 +22,7 @@ class RpnPrinter implements Expr.Visitor<String> {
   public String visitLiteralExpr(Expr.Literal expr) {
     if (expr.value == null) return "nil";
 
-    // Keep numbers clean (optional nicety)
+    // Optional nicety: print integers without .0
     if (expr.value instanceof Double) {
       double d = (Double) expr.value;
       if (d == (long) d) return Long.toString((long) d);
@@ -38,9 +38,19 @@ class RpnPrinter implements Expr.Visitor<String> {
     return right + " " + expr.operator.lexeme;
   }
 
+  // NEW: ternary conditional -> RPN form:
+  // condition then else ?:   (one possible unambiguous encoding)
+  @Override
+  public String visitConditionalExpr(Expr.Conditional expr) {
+    String condition = expr.condition.accept(this);
+    String thenBranch = expr.thenBranch.accept(this);
+    String elseBranch = expr.elseBranch.accept(this);
+    return condition + " " + thenBranch + " " + elseBranch + " " + "?:";
+  }
+
   // Optional quick test
   public static void main(String[] args) {
-    // (1 + 2) * (4 - 3)
+    // (1 + 2) * (4 - 3)  ->  1 2 + 4 3 - *
     Expr expression = new Expr.Binary(
         new Expr.Grouping(
             new Expr.Binary(
@@ -55,6 +65,5 @@ class RpnPrinter implements Expr.Visitor<String> {
                 new Expr.Literal(3.0))));
 
     System.out.println(new RpnPrinter().print(expression));
-    // Expected: 1 2 + 4 3 - *
   }
 }

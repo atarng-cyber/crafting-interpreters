@@ -14,7 +14,6 @@ class Parser {
     this.tokens = tokens;
   }
 
-  // Entry point for parsing a single expression.
   Expr parse() {
     try {
       return expression();
@@ -23,10 +22,41 @@ class Parser {
     }
   }
 
+  // expression → comma ;
   private Expr expression() {
-    return equality();
+    return comma();
   }
 
+  // comma → conditional ( "," conditional )* ;
+  // Lowest precedence, left-associative (like C).
+  private Expr comma() {
+    Expr expr = conditional();
+
+    while (match(COMMA)) {
+      Token operator = previous();
+      Expr right = conditional();
+      expr = new Expr.Binary(expr, operator, right);
+    }
+
+    return expr;
+  }
+
+  // conditional → equality ( "?" expression ":" conditional )? ;
+  // Right-associative (like C).
+  private Expr conditional() {
+    Expr expr = equality();
+
+    if (match(QUESTION)) {
+      Expr thenBranch = expression(); // in C grammar, middle is "expression" (comma allowed)
+      consume(COLON, "Expect ':' after then-branch of conditional expression.");
+      Expr elseBranch = conditional(); // recursion on the right makes it right-associative
+      expr = new Expr.Conditional(expr, thenBranch, elseBranch);
+    }
+
+    return expr;
+  }
+
+  // equality → comparison ( ( "!=" | "==" ) comparison )* ;
   private Expr equality() {
     Expr expr = comparison();
 
@@ -39,6 +69,7 @@ class Parser {
     return expr;
   }
 
+  // comparison → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
   private Expr comparison() {
     Expr expr = term();
 
@@ -51,6 +82,7 @@ class Parser {
     return expr;
   }
 
+  // term → factor ( ( "-" | "+" ) factor )* ;
   private Expr term() {
     Expr expr = factor();
 
@@ -63,6 +95,7 @@ class Parser {
     return expr;
   }
 
+  // factor → unary ( ( "/" | "*" ) unary )* ;
   private Expr factor() {
     Expr expr = unary();
 
@@ -75,6 +108,7 @@ class Parser {
     return expr;
   }
 
+  // unary → ( "!" | "-" ) unary | primary ;
   private Expr unary() {
     if (match(BANG, MINUS)) {
       Token operator = previous();
@@ -85,6 +119,8 @@ class Parser {
     return primary();
   }
 
+  // primary → literals | "(" expression ")" ;
+  // PLUS: error productions for missing left operand for binary ops.
   private Expr primary() {
     if (match(FALSE)) return new Expr.Literal(false);
     if (match(TRUE)) return new Expr.Literal(true);
@@ -100,12 +136,60 @@ class Parser {
       return new Expr.Grouping(expr);
     }
 
+    // --- Error productions: binary operator without left-hand operand ---
+    // Detect binary operator at beginning of an expression and recover by
+    // parsing/discarding a right operand with the correct precedence.
+    TokenType t = peek().type;
+    switch (t) {
+      case PLUS: { // unary + not allowed in Lox
+        error(peek(), "Expect left-hand operand before '+'.");
+        advance(); // consume '+'
+        Expr rhs = factor(); // '+' sits at term level: rhs should be factor
+        return rhs;
+      }
+      case STAR: {
+        error(peek(), "Expect left-hand operand before '*'.");
+        advance();
+        Expr rhs = unary(); // '*' sits at factor level: rhs should be unary
+        return rhs;
+      }
+      case SLASH: {
+        error(peek(), "Expect left-hand operand before '/'.");
+        advance();
+        Expr rhs = unary(); // '/' sits at factor level
+        return rhs;
+      }
+      case GREATER:
+      case GREATER_EQUAL:
+      case LESS:
+      case LESS_EQUAL: {
+        error(peek(), "Expect left-hand operand before comparison operator.");
+        advance();
+        Expr rhs = term(); // comparisons operate on term operands
+        return rhs;
+      }
+      case EQUAL_EQUAL:
+      case BANG_EQUAL: {
+        error(peek(), "Expect left-hand operand before equality operator.");
+        advance();
+        Expr rhs = comparison(); // equality operates on comparison operands
+        return rhs;
+      }
+      case COMMA: {
+        error(peek(), "Expect left-hand operand before ','.");
+        advance();
+        Expr rhs = conditional(); // comma operates on conditional operands
+        return rhs;
+      }
+      default:
+        break;
+    }
+
     throw error(peek(), "Expect expression.");
   }
 
   /* ----- Helper parsing primitives ----- */
 
-  // If the current token is any of the given types, consume it and return true.
   private boolean match(TokenType... types) {
     for (TokenType type : types) {
       if (check(type)) {
@@ -113,14 +197,11 @@ class Parser {
         return true;
       }
     }
-
     return false;
   }
 
-  // Require that the current token is of the given type; otherwise error.
   private Token consume(TokenType type, String message) {
     if (check(type)) return advance();
-
     throw error(peek(), message);
   }
 
@@ -149,29 +230,5 @@ class Parser {
   private ParseError error(Token token, String message) {
     Lox.error(token, message);
     return new ParseError();
-  }
-
-  // Synchronize parser state after an error (not used yet for expressions,
-  // but useful later when parsing statements).
-  private void synchronize() {
-    advance();
-
-    while (!isAtEnd()) {
-      if (previous().type == TokenType.SEMICOLON) return;
-
-      switch (peek().type) {
-        case CLASS:
-        case FUN:
-        case VAR:
-        case FOR:
-        case IF:
-        case WHILE:
-        case PRINT:
-        case RETURN:
-          return;
-      }
-
-      advance();
-    }
   }
 }

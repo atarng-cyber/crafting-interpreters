@@ -43,7 +43,6 @@ class Scanner {
 
   List<Token> scanTokens() {
     while (!isAtEnd()) {
-      // We are at the beginning of the next lexeme.
       start = current;
       scanToken();
     }
@@ -65,6 +64,8 @@ class Scanner {
       case '+': addToken(PLUS); break;
       case ';': addToken(SEMICOLON); break;
       case '*': addToken(STAR); break;
+      case '?': addToken(QUESTION); break; // NEW
+      case ':': addToken(COLON); break;     // NEW
 
       case '!':
         addToken(match('=') ? BANG_EQUAL : BANG);
@@ -81,19 +82,17 @@ class Scanner {
 
       case '/':
         if (match('/')) {
-         while (peek() != '\n' && !isAtEnd()) advance();
+          while (peek() != '\n' && !isAtEnd()) advance();
         } else if (match('*')) {
-           blockComment();
-         } else {
-           addToken(SLASH);
-         }
-         break;
-
+          blockComment(); // if you added block comments earlier
+        } else {
+          addToken(SLASH);
+        }
+        break;
 
       case ' ':
       case '\r':
       case '\t':
-        // Ignore whitespace.
         break;
 
       case '\n':
@@ -116,6 +115,37 @@ class Scanner {
     }
   }
 
+  // Optional: if you implemented /* ... */ earlier, keep this.
+  // If you didn't implement block comments, you can delete this method
+  // AND also delete the `else if (match('*')) { blockComment(); }` branch above.
+  private void blockComment() {
+    int depth = 1;
+
+    while (depth > 0 && !isAtEnd()) {
+      if (peek() == '\n') line++;
+
+      if (peek() == '/' && peekNext() == '*') {
+        advance();
+        advance();
+        depth++;
+        continue;
+      }
+
+      if (peek() == '*' && peekNext() == '/') {
+        advance();
+        advance();
+        depth--;
+        continue;
+      }
+
+      advance();
+    }
+
+    if (depth > 0) {
+      Lox.error(line, "Unterminated block comment.");
+    }
+  }
+
   private void identifier() {
     while (isAlphaNumeric(peek())) advance();
 
@@ -128,46 +158,13 @@ class Scanner {
   private void number() {
     while (isDigit(peek())) advance();
 
-    // Look for a fractional part.
     if (peek() == '.' && isDigit(peekNext())) {
-      // Consume the "."
       advance();
-
       while (isDigit(peek())) advance();
     }
 
     addToken(NUMBER, Double.parseDouble(source.substring(start, current)));
   }
-
-  private void blockComment() {
-  int depth = 1;
-
-  while (depth > 0 && !isAtEnd()) {
-    if (peek() == '\n') line++;
-
-    // Found a new nested opener /*
-    if (peek() == '/' && peekNext() == '*') {
-      advance(); // consume '/'
-      advance(); // consume '*'
-      depth++;
-      continue;
-    }
-
-    // Found a closer */
-    if (peek() == '*' && peekNext() == '/') {
-      advance(); // consume '*'
-      advance(); // consume '/'
-      depth--;
-      continue;
-    }
-
-    advance();
-  }
-
-  if (depth > 0) {
-    Lox.error(line, "Unterminated block comment.");
-  }
-}
 
   private void string() {
     while (peek() != '"' && !isAtEnd()) {
@@ -180,10 +177,8 @@ class Scanner {
       return;
     }
 
-    // The closing ".
     advance();
 
-    // Trim the surrounding quotes.
     String value = source.substring(start + 1, current - 1);
     addToken(STRING, value);
   }
