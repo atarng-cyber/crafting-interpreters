@@ -81,12 +81,14 @@ class Scanner {
 
       case '/':
         if (match('/')) {
-          // A comment goes until the end of the line.
-          while (peek() != '\n' && !isAtEnd()) advance();
-        } else {
-          addToken(SLASH);
-        }
-        break;
+         while (peek() != '\n' && !isAtEnd()) advance();
+        } else if (match('*')) {
+           blockComment();
+         } else {
+           addToken(SLASH);
+         }
+         break;
+
 
       case ' ':
       case '\r':
@@ -136,6 +138,36 @@ class Scanner {
 
     addToken(NUMBER, Double.parseDouble(source.substring(start, current)));
   }
+
+  private void blockComment() {
+  int depth = 1;
+
+  while (depth > 0 && !isAtEnd()) {
+    if (peek() == '\n') line++;
+
+    // Found a new nested opener /*
+    if (peek() == '/' && peekNext() == '*') {
+      advance(); // consume '/'
+      advance(); // consume '*'
+      depth++;
+      continue;
+    }
+
+    // Found a closer */
+    if (peek() == '*' && peekNext() == '/') {
+      advance(); // consume '*'
+      advance(); // consume '/'
+      depth--;
+      continue;
+    }
+
+    advance();
+  }
+
+  if (depth > 0) {
+    Lox.error(line, "Unterminated block comment.");
+  }
+}
 
   private void string() {
     while (peek() != '"' && !isAtEnd()) {
