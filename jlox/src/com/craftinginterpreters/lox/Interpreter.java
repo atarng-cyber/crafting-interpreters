@@ -71,22 +71,45 @@ class Interpreter implements Expr.Visitor<Object> {
       case MINUS:
         checkNumberOperands(expr.operator, left, right);
         return (double) left - (double) right;
+        
       case SLASH:
         checkNumberOperands(expr.operator, left, right);
-        return (double) left / (double) right;
+
+        // NEW: detect division by zero
+        double divisor = (double) right;
+        if (divisor == 0.0) {
+          throw new RuntimeError(expr.operator, "Division by zero.");
+        }
+
+        return (double) left / divisor;
+
       case STAR:
         checkNumberOperands(expr.operator, left, right);
         return (double) left * (double) right;
 
       case PLUS:
+        // number + number
         if (left instanceof Double && right instanceof Double) {
           return (double) left + (double) right;
         }
+
+        // string + string
         if (left instanceof String && right instanceof String) {
           return (String) left + (String) right;
         }
+
+        // NEW: if either is a string, stringify the other and concatenate
+        if (left instanceof String) {
+          return (String) left + stringify(right);
+        }
+
+        if (right instanceof String) {
+          return stringify(left) + (String) right;
+        }
+
         throw new RuntimeError(expr.operator,
-            "Operands must be two numbers or two strings.");
+            "Operands must be two numbers or at least one string.");
+
 
       default:
         // Unreachable.
