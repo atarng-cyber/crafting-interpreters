@@ -1,5 +1,6 @@
 package com.craftinginterpreters.lox;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static com.craftinginterpreters.lox.TokenType.*;
@@ -14,43 +15,91 @@ class Parser {
     this.tokens = tokens;
   }
 
-  Expr parse() {
+  // program → declaration* EOF ;
+  List<Stmt> parse() {
+    List<Stmt> statements = new ArrayList<>();
+    while (!isAtEnd()) {
+      statements.add(declaration());
+    }
+    return statements;
+  }
+
+  // declaration → varDecl | statement ;
+  private Stmt declaration() {
     try {
-      return expression();
+      if (match(VAR)) return varDeclaration();
+      return statement();
     } catch (ParseError error) {
+      synchronize();
       return null;
     }
   }
 
-  // expression → comma ;
-  private Expr expression() {
-    return comma();
+  // statement → exprStmt | printStmt | block ;
+  private Stmt statement() {
+    if (match(PRINT)) return printStatement();
+    if (match(LEFT_BRACE)) return new Stmt.Block(block());
+    return expressionStatement();
   }
 
-  // comma → conditional ( "," conditional )* ;
-  // Lowest precedence, left-associative (like C).
-  private Expr comma() {
-    Expr expr = conditional();
+  // printStmt → "print" expression ";" ;
+  private Stmt printStatement() {
+    Expr value = expression();
+    consume(SEMICOLON, "Expect ';' after value.");
+    return new Stmt.Print(value);
+  }
 
-    while (match(COMMA)) {
-      Token operator = previous();
-      Expr right = conditional();
-      expr = new Expr.Binary(expr, operator, right);
+  // exprStmt → expression ";" ;
+  private Stmt expressionStatement() {
+    Expr expr = expression();
+    consume(SEMICOLON, "Expect ';' after expression.");
+    return new Stmt.Expression(expr);
+  }
+
+  // varDecl → "var" IDENTIFIER ( "=" expression )? ";" ;
+  private Stmt varDeclaration() {
+    Token name = consume(IDENTIFIER, "Expect variable name.");
+
+    Expr initializer = null;
+    if (match(EQUAL)) {
+      initializer = expression();
     }
 
-    return expr;
+    consume(SEMICOLON, "Expect ';' after variable declaration.");
+    return new Stmt.Var(name, initializer);
   }
 
-  // conditional → equality ( "?" expression ":" conditional )? ;
-  // Right-associative (like C).
-  private Expr conditional() {
+  // block → "{" declaration* "}" ;
+  private List<Stmt> block() {
+    List<Stmt> statements = new ArrayList<>();
+
+    while (!check(RIGHT_BRACE) && !isAtEnd()) {
+      statements.add(declaration());
+    }
+
+    consume(RIGHT_BRACE, "Expect '}' after block.");
+    return statements;
+  }
+
+  // expression → assignment ;
+  private Expr expression() {
+    return assignment();
+  }
+
+  // assignment → IDENTIFIER "=" assignment | equality ;
+  private Expr assignment() {
     Expr expr = equality();
 
-    if (match(QUESTION)) {
-      Expr thenBranch = expression(); // in C grammar, middle is "expression" (comma allowed)
-      consume(COLON, "Expect ':' after then-branch of conditional expression.");
-      Expr elseBranch = conditional(); // recursion on the right makes it right-associative
-      expr = new Expr.Conditional(expr, thenBranch, elseBranch);
+    if (match(EQUAL)) {
+      Token equals = previous();
+      Expr value = assignment();
+
+      if (expr instanceof Expr.Variable) {
+        Token name = ((Expr.Variable) expr).name;
+        return new Expr.Assign(name, value);
+      }
+
+      error(equals, "Invalid assignment target.");
     }
 
     return expr;
@@ -119,8 +168,10 @@ class Parser {
     return primary();
   }
 
-  // primary → literals | "(" expression ")" ;
-  // PLUS: error productions for missing left operand for binary ops.
+  // primary → "true" | "false" | "nil"
+  //         | NUMBER | STRING
+  //         | IDENTIFIER
+  //         | "(" expression ")" ;
   private Expr primary() {
     if (match(FALSE)) return new Expr.Literal(false);
     if (match(TRUE)) return new Expr.Literal(true);
@@ -130,65 +181,44 @@ class Parser {
       return new Expr.Literal(previous().literal);
     }
 
+    if (match(IDENTIFIER)) {
+      return new Expr.Variable(previous());
+    }
+
     if (match(LEFT_PAREN)) {
       Expr expr = expression();
       consume(RIGHT_PAREN, "Expect ')' after expression.");
       return new Expr.Grouping(expr);
     }
 
-    // --- Error productions: binary operator without left-hand operand ---
-    // Detect binary operator at beginning of an expression and recover by
-    // parsing/discarding a right operand with the correct precedence.
-    TokenType t = peek().type;
-    switch (t) {
-      case PLUS: { // unary + not allowed in Lox
-        error(peek(), "Expect left-hand operand before '+'.");
-        advance(); // consume '+'
-        Expr rhs = factor(); // '+' sits at term level: rhs should be factor
-        return rhs;
-      }
-      case STAR: {
-        error(peek(), "Expect left-hand operand before '*'.");
-        advance();
-        Expr rhs = unary(); // '*' sits at factor level: rhs should be unary
-        return rhs;
-      }
-      case SLASH: {
-        error(peek(), "Expect left-hand operand before '/'.");
-        advance();
-        Expr rhs = unary(); // '/' sits at factor level
-        return rhs;
-      }
-      case GREATER:
-      case GREATER_EQUAL:
-      case LESS:
-      case LESS_EQUAL: {
-        error(peek(), "Expect left-hand operand before comparison operator.");
-        advance();
-        Expr rhs = term(); // comparisons operate on term operands
-        return rhs;
-      }
-      case EQUAL_EQUAL:
-      case BANG_EQUAL: {
-        error(peek(), "Expect left-hand operand before equality operator.");
-        advance();
-        Expr rhs = comparison(); // equality operates on comparison operands
-        return rhs;
-      }
-      case COMMA: {
-        error(peek(), "Expect left-hand operand before ','.");
-        advance();
-        Expr rhs = conditional(); // comma operates on conditional operands
-        return rhs;
-      }
-      default:
-        break;
-    }
-
     throw error(peek(), "Expect expression.");
   }
 
-  /* ----- Helper parsing primitives ----- */
+  // ---------- error recovery ----------
+
+  private void synchronize() {
+    advance();
+
+    while (!isAtEnd()) {
+      if (previous().type == SEMICOLON) return;
+
+      switch (peek().type) {
+        case CLASS:
+        case FUN:
+        case VAR:
+        case FOR:
+        case IF:
+        case WHILE:
+        case PRINT:
+        case RETURN:
+          return;
+      }
+
+      advance();
+    }
+  }
+
+  // ---------- helper methods ----------
 
   private boolean match(TokenType... types) {
     for (TokenType type : types) {
@@ -197,6 +227,7 @@ class Parser {
         return true;
       }
     }
+
     return false;
   }
 
@@ -231,4 +262,14 @@ class Parser {
     Lox.error(token, message);
     return new ParseError();
   }
+
+  Expr parseExpression() {
+  try {
+    Expr expr = expression();
+    if (!isAtEnd()) throw error(peek(), "Expect end of expression.");
+    return expr;
+  } catch (ParseError error) {
+    return null;
+  }
+}
 }

@@ -27,10 +27,14 @@ class AstPrinter implements Expr.Visitor<String> {
   }
 
   @Override
-  public String visitConditionalExpr(Expr.Conditional expr) {
-    // show structure clearly: (?: condition then else)
-    return parenthesize("?:", expr.condition, expr.thenBranch, expr.elseBranch);
-  }
+    public String visitVariableExpr(Expr.Variable expr) {
+      return expr.name.lexeme;
+}
+
+  @Override
+    public String visitAssignExpr(Expr.Assign expr) {
+      return parenthesize("assign " + expr.name.lexeme, expr.value);
+}
 
   private String parenthesize(String name, Expr... exprs) {
     StringBuilder builder = new StringBuilder();

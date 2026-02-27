@@ -38,15 +38,17 @@ class RpnPrinter implements Expr.Visitor<String> {
     return right + " " + expr.operator.lexeme;
   }
 
-  // NEW: ternary conditional -> RPN form:
-  // condition then else ?:   (one possible unambiguous encoding)
   @Override
-  public String visitConditionalExpr(Expr.Conditional expr) {
-    String condition = expr.condition.accept(this);
-    String thenBranch = expr.thenBranch.accept(this);
-    String elseBranch = expr.elseBranch.accept(this);
-    return condition + " " + thenBranch + " " + elseBranch + " " + "?:";
-  }
+  public String visitVariableExpr(Expr.Variable expr) {
+    return expr.name.lexeme;
+}
+
+  @Override
+  public String visitAssignExpr(Expr.Assign expr) {
+  // In RPN: <value> <name> =
+    String value = expr.value.accept(this);
+    return value + " " + expr.name.lexeme + " =";
+}
 
   // Optional quick test
   public static void main(String[] args) {

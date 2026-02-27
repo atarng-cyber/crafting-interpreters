@@ -1,15 +1,72 @@
 package com.craftinginterpreters.lox;
 
-class Interpreter implements Expr.Visitor<Object> {
+import java.util.List;
 
-  void interpret(Expr expression) {
+class Interpreter implements Expr.Visitor<Object>,
+                             Stmt.Visitor<Void> {
+
+  private Environment environment = new Environment();
+
+  void interpret(List<Stmt> statements) {
     try {
-      Object value = evaluate(expression);
-      System.out.println(stringify(value));
+      for (Stmt statement : statements) {
+        execute(statement);
+      }
     } catch (RuntimeError error) {
       Lox.runtimeError(error);
     }
   }
+
+  // ---------------- Statements ----------------
+
+  private void execute(Stmt stmt) {
+    stmt.accept(this);
+  }
+
+  void executeBlock(List<Stmt> statements, Environment environment) {
+    Environment previous = this.environment;
+    try {
+      this.environment = environment;
+
+      for (Stmt statement : statements) {
+        execute(statement);
+      }
+    } finally {
+      this.environment = previous;
+    }
+  }
+
+  @Override
+  public Void visitExpressionStmt(Stmt.Expression stmt) {
+    evaluate(stmt.expression);
+    return null;
+  }
+
+  @Override
+  public Void visitPrintStmt(Stmt.Print stmt) {
+    Object value = evaluate(stmt.expression);
+    System.out.println(stringify(value));
+    return null;
+  }
+
+  @Override
+  public Void visitVarStmt(Stmt.Var stmt) {
+    Object value = null;
+    if (stmt.initializer != null) {
+      value = evaluate(stmt.initializer);
+    }
+
+    environment.define(stmt.name.lexeme, value);
+    return null;
+  }
+
+  @Override
+  public Void visitBlockStmt(Stmt.Block stmt) {
+    executeBlock(stmt.statements, new Environment(environment));
+    return null;
+  }
+
+  // ---------------- Expressions ----------------
 
   @Override
   public Object visitLiteralExpr(Expr.Literal expr) {
@@ -32,20 +89,12 @@ class Interpreter implements Expr.Visitor<Object> {
         checkNumberOperand(expr.operator, right);
         return -(double) right;
       default:
-        // Unreachable.
         return null;
     }
   }
 
   @Override
   public Object visitBinaryExpr(Expr.Binary expr) {
-    // SPECIAL: comma operator (C-style)
-    // Evaluate left, discard, then evaluate and return right.
-    if (expr.operator.type == TokenType.COMMA) {
-      evaluate(expr.left);
-      return evaluate(expr.right);
-    }
-
     Object left = evaluate(expr.left);
     Object right = evaluate(expr.right);
 
@@ -71,16 +120,13 @@ class Interpreter implements Expr.Visitor<Object> {
       case MINUS:
         checkNumberOperands(expr.operator, left, right);
         return (double) left - (double) right;
-        
+
       case SLASH:
         checkNumberOperands(expr.operator, left, right);
-
-        // NEW: detect division by zero
         double divisor = (double) right;
         if (divisor == 0.0) {
           throw new RuntimeError(expr.operator, "Division by zero.");
         }
-
         return (double) left / divisor;
 
       case STAR:
@@ -88,21 +134,15 @@ class Interpreter implements Expr.Visitor<Object> {
         return (double) left * (double) right;
 
       case PLUS:
-        // number + number
         if (left instanceof Double && right instanceof Double) {
           return (double) left + (double) right;
         }
-
-        // string + string
         if (left instanceof String && right instanceof String) {
           return (String) left + (String) right;
         }
-
-        // NEW: if either is a string, stringify the other and concatenate
         if (left instanceof String) {
           return (String) left + stringify(right);
         }
-
         if (right instanceof String) {
           return stringify(left) + (String) right;
         }
@@ -110,28 +150,28 @@ class Interpreter implements Expr.Visitor<Object> {
         throw new RuntimeError(expr.operator,
             "Operands must be two numbers or at least one string.");
 
-
       default:
-        // Unreachable.
         return null;
     }
   }
 
-  // NEW: ternary conditional ?:
   @Override
-  public Object visitConditionalExpr(Expr.Conditional expr) {
-    Object conditionValue = evaluate(expr.condition);
+  public Object visitVariableExpr(Expr.Variable expr) {
+    return environment.get(expr.name);
+  }
 
-    if (isTruthy(conditionValue)) {
-      return evaluate(expr.thenBranch);
-    } else {
-      return evaluate(expr.elseBranch);
-    }
+  @Override
+  public Object visitAssignExpr(Expr.Assign expr) {
+    Object value = evaluate(expr.value);
+    environment.assign(expr.name, value);
+    return value;
   }
 
   private Object evaluate(Expr expr) {
     return expr.accept(this);
   }
+
+  // ---------------- Helpers ----------------
 
   private boolean isTruthy(Object object) {
     if (object == null) return false;
@@ -168,4 +208,14 @@ class Interpreter implements Expr.Visitor<Object> {
 
     return object.toString();
   }
+
+  void interpretExpression(Expr expr) {
+  try {
+    Object value = evaluate(expr);
+    System.out.println(stringify(value));
+  } catch (RuntimeError error) {
+    Lox.runtimeError(error);
+  }
+}
+
 }

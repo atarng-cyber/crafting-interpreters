@@ -38,13 +38,31 @@ public class Lox {
     InputStreamReader input = new InputStreamReader(System.in);
     BufferedReader reader = new BufferedReader(input);
 
-    for (;;) {
-      System.out.print("> ");
-      String line = reader.readLine();
-      if (line == null) break;
-      run(line);
-      hadError = false;
+    while (true) {
+  System.out.print("> ");
+  String line = reader.readLine();
+  if (line == null) break;
+
+  hadError = false;
+
+  List<Token> tokens = new Scanner(line).scanTokens();
+  Parser parser = new Parser(tokens);
+
+  List<Stmt> statements = parser.parse();
+  if (!hadError) {
+    interpreter.interpret(statements);
+  } else {
+    // Try expression mode
+    hadError = false;
+    parser = new Parser(tokens);
+    Expr expr = parser.parseExpression();
+    if (!hadError && expr != null) {
+      interpreter.interpretExpression(expr);
     }
+  }
+
+  hadError = false; // don’t poison the next prompt entry
+}
   }
 
   private static void run(String source) {
@@ -52,12 +70,12 @@ public class Lox {
     java.util.List<Token> tokens = scanner.scanTokens();
 
     Parser parser = new Parser(tokens);
-    Expr expression = parser.parse();
+    List<Stmt> statements = parser.parse();
 
     // Stop if there was a syntax error.
     if (hadError) return;
 
-    interpreter.interpret(expression);
+    interpreter.interpret(statements);
   }
 
 
