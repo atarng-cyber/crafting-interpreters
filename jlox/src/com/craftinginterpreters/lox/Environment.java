@@ -5,6 +5,7 @@ import java.util.Map;
 
 class Environment {
   final Environment enclosing;
+  private static final Object UNINITIALIZED = new Object();
   private final Map<String, Object> values = new HashMap<>();
 
   Environment() {
@@ -20,14 +21,12 @@ class Environment {
   }
 
   Object get(Token name) {
-    if (values.containsKey(name.lexeme)) {
-      return values.get(name.lexeme);
-    }
-
-    if (enclosing != null) return enclosing.get(name);
-
-    throw new RuntimeError(name,
-        "Undefined variable '" + name.lexeme + "'.");
+    Object value = values.get(name.lexeme);
+if (value == UNINITIALIZED) {
+  throw new RuntimeError(name,
+      "Variable '" + name.lexeme + "' is declared but not initialized.");
+}
+return value;
   }
 
   void assign(Token name, Object value) {
@@ -44,4 +43,6 @@ class Environment {
     throw new RuntimeError(name,
         "Undefined variable '" + name.lexeme + "'.");
   }
+
+  static Object uninitialized() { return UNINITIALIZED; }
 }
