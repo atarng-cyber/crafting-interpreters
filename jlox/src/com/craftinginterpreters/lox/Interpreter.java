@@ -178,10 +178,15 @@ public Void visitIfStmt(Stmt.If stmt) {
   return null;
 }
 
-  @Override
+
+@Override
 public Void visitWhileStmt(Stmt.While stmt) {
   while (isTruthy(evaluate(stmt.condition))) {
-    execute(stmt.body);
+    try {
+      execute(stmt.body);
+    } catch (BreakSignal b) {
+      break;
+    }
   }
   return null;
 }
@@ -197,6 +202,11 @@ public Object visitLogicalExpr(Expr.Logical expr) {
   }
 
   return evaluate(expr.right);
+}
+
+@Override
+public Void visitBreakStmt(Stmt.Break stmt) {
+  throw new BreakSignal();
 }
 
   private Object evaluate(Expr expr) {
@@ -247,6 +257,12 @@ public Object visitLogicalExpr(Expr.Logical expr) {
     System.out.println(stringify(value));
   } catch (RuntimeError error) {
     Lox.runtimeError(error);
+  }
+}
+
+private static class BreakSignal extends RuntimeException {
+  BreakSignal() {
+    super(null, null, false, false); // no stack trace
   }
 }
 

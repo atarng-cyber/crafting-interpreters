@@ -11,6 +11,7 @@ abstract class Stmt {
     R visitVarStmt(Var stmt);
     R visitIfStmt(If stmt);
     R visitWhileStmt(While stmt);
+    R visitBreakStmt(Break stmt);
   }
 
   static class Block extends Stmt {
@@ -97,6 +98,19 @@ abstract class Stmt {
 
     final Expr condition;
     final Stmt body;
+  }
+
+  static class Break extends Stmt {
+    Break(Token keyword) {
+      this.keyword = keyword;
+    }
+
+    @Override
+    <R> R accept(Visitor<R> visitor) {
+      return visitor.visitBreakStmt(this);
+    }
+
+    final Token keyword;
   }
 
   abstract <R> R accept(Visitor<R> visitor);
