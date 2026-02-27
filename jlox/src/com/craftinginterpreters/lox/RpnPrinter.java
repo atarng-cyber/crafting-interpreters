@@ -50,6 +50,13 @@ class RpnPrinter implements Expr.Visitor<String> {
     return value + " " + expr.name.lexeme + " =";
 }
 
+  @Override
+public String visitLogicalExpr(Expr.Logical expr) {
+  String left = expr.left.accept(this);
+  String right = expr.right.accept(this);
+  return left + " " + right + " " + expr.operator.lexeme;
+}
+
   // Optional quick test
   public static void main(String[] args) {
     // (1 + 2) * (4 - 3)  ->  1 2 + 4 3 - *

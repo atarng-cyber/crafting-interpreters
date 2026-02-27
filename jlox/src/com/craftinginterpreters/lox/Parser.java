@@ -1,6 +1,7 @@
 package com.craftinginterpreters.lox;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static com.craftinginterpreters.lox.TokenType.*;
@@ -37,10 +38,86 @@ class Parser {
 
   // statement → exprStmt | printStmt | block ;
   private Stmt statement() {
+    if (match(FOR)) return forStatement();
+    if (match(IF)) return ifStatement();
     if (match(PRINT)) return printStatement();
+    if (match(WHILE)) return whileStatement();
     if (match(LEFT_BRACE)) return new Stmt.Block(block());
+
     return expressionStatement();
   }
+
+  private Stmt ifStatement() {
+  consume(LEFT_PAREN, "Expect '(' after 'if'.");
+  Expr condition = expression();
+  consume(RIGHT_PAREN, "Expect ')' after if condition.");
+
+  Stmt thenBranch = statement();
+  Stmt elseBranch = null;
+  if (match(ELSE)) {
+    elseBranch = statement();
+  }
+
+  return new Stmt.If(condition, thenBranch, elseBranch);
+}
+
+private Stmt whileStatement() {
+  consume(LEFT_PAREN, "Expect '(' after 'while'.");
+  Expr condition = expression();
+  consume(RIGHT_PAREN, "Expect ')' after condition.");
+  Stmt body = statement();
+
+  return new Stmt.While(condition, body);
+}
+
+private Stmt forStatement() {
+  consume(LEFT_PAREN, "Expect '(' after 'for'.");
+
+  // initializer
+  Stmt initializer;
+  if (match(SEMICOLON)) {
+    initializer = null;
+  } else if (match(VAR)) {
+    initializer = varDeclaration();
+  } else {
+    initializer = expressionStatement();
+  }
+
+  // condition
+  Expr condition = null;
+  if (!check(SEMICOLON)) {
+    condition = expression();
+  }
+  consume(SEMICOLON, "Expect ';' after loop condition.");
+
+  // increment
+  Expr increment = null;
+  if (!check(RIGHT_PAREN)) {
+    increment = expression();
+  }
+  consume(RIGHT_PAREN, "Expect ')' after for clauses.");
+
+  Stmt body = statement();
+
+  // desugar increment
+  if (increment != null) {
+    body = new Stmt.Block(Arrays.asList(
+        body,
+        new Stmt.Expression(increment)
+    ));
+  }
+
+  // desugar condition
+  if (condition == null) condition = new Expr.Literal(true);
+  body = new Stmt.While(condition, body);
+
+  // desugar initializer
+  if (initializer != null) {
+    body = new Stmt.Block(Arrays.asList(initializer, body));
+  }
+
+  return body;
+}
 
   // printStmt → "print" expression ";" ;
   private Stmt printStatement() {
@@ -88,7 +165,7 @@ class Parser {
 
   // assignment → IDENTIFIER "=" assignment | equality ;
   private Expr assignment() {
-    Expr expr = equality();
+    Expr expr = or();
 
     if (match(EQUAL)) {
       Token equals = previous();
@@ -104,6 +181,30 @@ class Parser {
 
     return expr;
   }
+
+  private Expr or() {
+  Expr expr = and();
+
+  while (match(OR)) {
+    Token operator = previous();
+    Expr right = and();
+    expr = new Expr.Logical(expr, operator, right);
+  }
+
+  return expr;
+}
+
+private Expr and() {
+  Expr expr = equality();
+
+  while (match(AND)) {
+    Token operator = previous();
+    Expr right = equality();
+    expr = new Expr.Logical(expr, operator, right);
+  }
+
+  return expr;
+}
 
   // equality → comparison ( ( "!=" | "==" ) comparison )* ;
   private Expr equality() {
