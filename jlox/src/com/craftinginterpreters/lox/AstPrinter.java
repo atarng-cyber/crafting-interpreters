@@ -65,4 +65,10 @@ public String visitCallExpr(Expr.Call expr) {
   return parenthesize("call", parts);
 }
 
+@Override
+public String visitFunctionExpr(Expr.Function expr) {
+  // Basic readable representation. (You can fancy it up if you want.)
+  return "<fun>";
+}
+
 }

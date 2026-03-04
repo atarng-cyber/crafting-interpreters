@@ -1,5 +1,7 @@
 package com.craftinginterpreters.lox;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -8,6 +10,7 @@ class Interpreter implements Expr.Visitor<Object>,
 
 final Environment globals = new Environment();
 private Environment environment = globals;
+private final Map<Expr, Integer> locals = new HashMap<>();
 
 Interpreter() {
   globals.define("clock", new LoxCallable() {
@@ -173,16 +176,23 @@ environment.define(stmt.name.lexeme, value);
   }
 
   @Override
-  public Object visitVariableExpr(Expr.Variable expr) {
-    return environment.get(expr.name);
-  }
+public Object visitVariableExpr(Expr.Variable expr) {
+  return lookUpVariable(expr.name, expr);
+}
 
   @Override
-  public Object visitAssignExpr(Expr.Assign expr) {
-    Object value = evaluate(expr.value);
-    environment.assign(expr.name, value);
-    return value;
+public Object visitAssignExpr(Expr.Assign expr) {
+  Object value = evaluate(expr.value);
+
+  Integer distance = locals.get(expr);
+  if (distance != null) {
+    environment.assignAt(distance, expr.name, value);
+  } else {
+    globals.assign(expr.name, value);
   }
+
+  return value;
+}
 
   @Override
 public Void visitIfStmt(Stmt.If stmt) {
@@ -326,6 +336,19 @@ public Void visitReturnStmt(Stmt.Return stmt) {
 private static class BreakSignal extends RuntimeException {
   BreakSignal() {
     super(null, null, false, false); // no stack trace
+  }
+}
+
+void resolve(Expr expr, int depth) {
+  locals.put(expr, depth);
+}
+
+private Object lookUpVariable(Token name, Expr expr) {
+  Integer distance = locals.get(expr);
+  if (distance != null) {
+    return environment.getAt(distance, name.lexeme);
+  } else {
+    return globals.get(name);
   }
 }
 

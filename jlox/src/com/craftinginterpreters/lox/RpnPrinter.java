@@ -85,4 +85,11 @@ public String visitCallExpr(Expr.Call expr) {
   sb.append(expr.callee.accept(this)).append(" call");
   return sb.toString();
 }
+
+@Override
+public String visitFunctionExpr(Expr.Function expr) {
+  // RPN for a function literal isn't super meaningful; just show a marker.
+  // If you want: include param count.
+  return "fun";
+}
 }
