@@ -75,4 +75,14 @@ public String visitLogicalExpr(Expr.Logical expr) {
 
     System.out.println(new RpnPrinter().print(expression));
   }
+
+@Override
+public String visitCallExpr(Expr.Call expr) {
+  StringBuilder sb = new StringBuilder();
+  for (Expr arg : expr.arguments) {
+    sb.append(arg.accept(this)).append(" ");
+  }
+  sb.append(expr.callee.accept(this)).append(" call");
+  return sb.toString();
+}
 }

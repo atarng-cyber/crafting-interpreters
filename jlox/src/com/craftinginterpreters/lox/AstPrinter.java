@@ -1,5 +1,7 @@
 package com.craftinginterpreters.lox;
 
+import java.util.List;
+
 class AstPrinter implements Expr.Visitor<String> {
   String print(Expr expr) {
     return expr.accept(this);
@@ -53,4 +55,14 @@ public String visitLogicalExpr(Expr.Logical expr) {
 
     return builder.toString();
   }
+@Override
+public String visitCallExpr(Expr.Call expr) {
+  // Basic display: (call callee arg1 arg2 ...)
+  List<Expr> args = expr.arguments;
+  Expr[] parts = new Expr[args.size() + 1];
+  parts[0] = expr.callee;
+  for (int i = 0; i < args.size(); i++) parts[i + 1] = args.get(i);
+  return parenthesize("call", parts);
+}
+
 }

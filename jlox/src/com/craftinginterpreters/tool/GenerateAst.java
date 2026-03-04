@@ -21,7 +21,8 @@ public class GenerateAst {
   "Literal  : Object value",
   "Logical  : Expr left, Token operator, Expr right",
   "Unary    : Token operator, Expr right",
-  "Variable : Token name"
+  "Variable : Token name",
+  "Call     : Expr callee, Token paren, List<Expr> arguments"
 ));
 
     defineAst(outputDir, "Stmt", Arrays.asList(
@@ -31,7 +32,9 @@ public class GenerateAst {
   "Var        : Token name, Expr initializer",
   "If         : Expr condition, Stmt thenBranch, Stmt elseBranch",
   "While      : Expr condition, Stmt body",
-  "Break      : Token keyword"
+  "Break      : Token keyword",
+  "Function   : Token name, List<Token> params, List<Stmt> body",
+  "Return     : Token keyword, Expr value"
 ));
   }
 
@@ -45,7 +48,7 @@ public class GenerateAst {
     writer.println("package com.craftinginterpreters.lox;");
     writer.println();
 
-    if (baseName.equals("Stmt")) {
+    if (baseName.equals("Expr") || baseName.equals("Stmt")) {
       writer.println("import java.util.List;");
       writer.println();
 }
