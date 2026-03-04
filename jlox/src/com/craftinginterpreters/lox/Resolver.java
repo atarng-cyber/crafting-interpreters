@@ -7,9 +7,27 @@ import java.util.Stack;
 
 class Resolver implements Expr.Visitor<Void>, Stmt.Visitor<Void> {
   private final Interpreter interpreter;
-  private final Stack<Map<String, Boolean>> scopes = new Stack<>();
+private static class VarInfo {
+  final Token name;
+  final int index;
+  boolean defined;
+  boolean used;
 
-  private enum FunctionType {
+  VarInfo(Token name, int index) {
+    this.name = name;
+    this.index = index;
+    this.defined = false;
+    this.used = false;
+  }
+}
+
+private final Stack<Map<String, VarInfo>> scopes = new Stack<>();
+private final Stack<Integer> nextIndex = new Stack<>();
+
+// Track what node "owns" this scope so we can store its slot count
+private final Stack<Object> scopeOwner = new Stack<>();
+
+private enum FunctionType {
     NONE,
     FUNCTION
   }
@@ -41,76 +59,111 @@ private LoopType currentLoop = LoopType.NONE;
     if (expr != null) expr.accept(this);
   }
 
-  private void beginScope() {
-    scopes.push(new HashMap<String, Boolean>());
+private void beginScope(Object owner) {
+  scopes.push(new HashMap<String, VarInfo>());
+  nextIndex.push(0);
+  scopeOwner.push(owner);
+}
+
+private void endScope() {
+  Map<String, VarInfo> scope = scopes.pop();
+  int slotCount = nextIndex.pop();
+  Object owner = scopeOwner.pop();
+
+  // unused local error (optional: treat params too)
+  for (VarInfo info : scope.values()) {
+    if (info.defined && !info.used) {
+      Lox.error(info.name, "Local variable '" + info.name.lexeme + "' is never used.");
+    }
   }
 
-  private void endScope() {
-    scopes.pop();
+  if (owner instanceof Stmt.Block) {
+    interpreter.registerBlockSlots((Stmt.Block) owner, slotCount);
+  } else if (owner instanceof Stmt.Function) {
+    interpreter.registerFunctionSlots((Stmt.Function) owner, slotCount);
   }
+}
 
   private void declare(Token name) {
-    if (scopes.isEmpty()) return;
+  if (scopes.isEmpty()) return;
 
-    Map<String, Boolean> scope = scopes.peek();
-    if (scope.containsKey(name.lexeme)) {
-      Lox.error(name, "Already a variable with this name in this scope.");
-    }
-
-    scope.put(name.lexeme, false);
+  Map<String, VarInfo> scope = scopes.peek();
+  if (scope.containsKey(name.lexeme)) {
+    Lox.error(name, "Already a variable with this name in this scope.");
   }
 
-  private void define(Token name) {
-    if (scopes.isEmpty()) return;
-    scopes.peek().put(name.lexeme, true);
-  }
+  int index = nextIndex.pop();
+  nextIndex.push(index + 1);
+
+  scope.put(name.lexeme, new VarInfo(name, index));
+}
+
+private void define(Token name) {
+  if (scopes.isEmpty()) return;
+  VarInfo info = scopes.peek().get(name.lexeme);
+  if (info != null) info.defined = true;
+}
 
   private void resolveLocal(Expr expr, Token name) {
-    for (int i = scopes.size() - 1; i >= 0; i--) {
-      if (scopes.get(i).containsKey(name.lexeme)) {
-        interpreter.resolve(expr, scopes.size() - 1 - i);
-        return;
-      }
+  for (int i = scopes.size() - 1; i >= 0; i--) {
+    Map<String, VarInfo> scope = scopes.get(i);
+    if (scope.containsKey(name.lexeme)) {
+      VarInfo info = scope.get(name.lexeme);
+      int depth = scopes.size() - 1 - i;
+      interpreter.resolve(expr, depth, info.index);
+      return;
     }
-    // Not found => assume global.
+  }
+}
+
+private void resolveFunction(Stmt.Function function, FunctionType type) {
+  FunctionType enclosingFunction = currentFunction;
+  currentFunction = type;
+
+  beginScope(function);
+
+  for (Token param : function.params) {
+    declare(param);
+    define(param);
   }
 
-  private void resolveFunction(Stmt.Function function, FunctionType type) {
-    FunctionType enclosing = currentFunction;
-    currentFunction = type;
+  resolve(function.body);
+  endScope();
 
-    beginScope();
-    for (Token param : function.params) {
-      declare(param);
-      define(param);
-    }
-    resolve(function.body);
-    endScope();
-
-    currentFunction = enclosing;
-  }
+  currentFunction = enclosingFunction;
+}
 
   // ----------------
   // Statement visitors
   // ----------------
 
-  @Override
-  public Void visitBlockStmt(Stmt.Block stmt) {
-    beginScope();
-    resolve(stmt.statements);
-    endScope();
-    return null;
+@Override
+public Void visitBlockStmt(Stmt.Block stmt) {
+  beginScope(stmt);
+  resolve(stmt.statements);
+  endScope();
+  return null;
+}
+
+@Override
+public Void visitVarStmt(Stmt.Var stmt) {
+  declare(stmt.name);
+
+  // If this is a local (not global), record the slot index for runtime initialization
+  if (!scopes.isEmpty()) {
+    VarInfo info = scopes.peek().get(stmt.name.lexeme);
+    if (info != null) {
+      interpreter.registerVarSlot(stmt, info.index);
+    }
   }
 
-  @Override
-  public Void visitVarStmt(Stmt.Var stmt) {
-    declare(stmt.name);
-    if (stmt.initializer != null) {
-      resolve(stmt.initializer);
-    }
-    define(stmt.name);
-    return null;
+  if (stmt.initializer != null) {
+    resolve(stmt.initializer);
   }
+
+  define(stmt.name);
+  return null;
+}
 
   @Override
   public Void visitFunctionStmt(Stmt.Function stmt) {
@@ -173,14 +226,18 @@ public Void visitWhileStmt(Stmt.While stmt) {
   }
 
   @Override
-  public Void visitVariableExpr(Expr.Variable expr) {
-    if (!scopes.isEmpty()
-        && scopes.peek().get(expr.name.lexeme) == Boolean.FALSE) {
+public Void visitVariableExpr(Expr.Variable expr) {
+  if (!scopes.isEmpty()) {
+    VarInfo info = scopes.peek().get(expr.name.lexeme);
+    if (info != null && !info.defined) {
       Lox.error(expr.name, "Can't read local variable in its own initializer.");
     }
-    resolveLocal(expr, expr.name);
-    return null;
   }
+
+  resolveLocal(expr, expr.name);
+  markUsed(expr.name);
+  return null;
+}
 
   @Override
   public Void visitBinaryExpr(Expr.Binary expr) {
@@ -188,6 +245,7 @@ public Void visitWhileStmt(Stmt.While stmt) {
     resolve(expr.right);
     return null;
   }
+
 
   @Override
   public Void visitCallExpr(Expr.Call expr) {
@@ -239,7 +297,7 @@ public Void visitBreakStmt(Stmt.Break stmt) {
     FunctionType enclosing = currentFunction;
     currentFunction = FunctionType.FUNCTION;
 
-    beginScope();
+    beginScope(expr);
     for (Token param : expr.params) {
       declare(param);
       define(param);
@@ -250,4 +308,14 @@ public Void visitBreakStmt(Stmt.Break stmt) {
     currentFunction = enclosing;
     return null;
   }
+
+  private void markUsed(Token name) {
+  for (int i = scopes.size() - 1; i >= 0; i--) {
+    VarInfo info = scopes.get(i).get(name.lexeme);
+    if (info != null) {
+      info.used = true;
+      return;
+    }
+  }
+}
 }

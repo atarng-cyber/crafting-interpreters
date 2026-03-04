@@ -17,21 +17,21 @@ class LoxFunction implements LoxCallable {
   }
 
   @Override
-  public Object call(Interpreter interpreter, List<Object> arguments) {
-    Environment environment = new Environment(closure);
+public Object call(Interpreter interpreter, List<Object> arguments) {
+  int slotCount = interpreter.getFunctionSlotCount(declaration);
+  Environment environment = new Environment(closure, slotCount);
 
-    for (int i = 0; i < declaration.params.size(); i++) {
-      environment.define(declaration.params.get(i).lexeme, arguments.get(i));
-    }
-
-    try {
-      interpreter.executeBlock(declaration.body, environment);
-    } catch (Return returnValue) {
-      return returnValue.value;
-    }
-
-    return null; // nil
+  for (int i = 0; i < declaration.params.size(); i++) {
+    environment.defineAt(i, arguments.get(i));
   }
+
+  try {
+    interpreter.executeBlock(declaration.body, environment);
+  } catch (Return returnValue) {
+    return returnValue.value;
+  }
+  return null;
+}
 
   @Override
 public String toString() {

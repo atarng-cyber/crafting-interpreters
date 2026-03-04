@@ -10,7 +10,19 @@ class Interpreter implements Expr.Visitor<Object>,
 
 final Environment globals = new Environment();
 private Environment environment = globals;
-private final Map<Expr, Integer> locals = new HashMap<>();
+private final Map<Expr, Local> locals = new HashMap<>();
+private final Map<Stmt.Block, Integer> blockSlotCounts = new HashMap<>();
+private final Map<Stmt.Function, Integer> functionSlotCounts = new HashMap<>();
+private final Map<Stmt.Var, Integer> varDeclSlots = new HashMap<>();
+
+private static class Local {
+  final int depth;
+  final int index;
+  Local(int depth, int index) {
+    this.depth = depth;
+    this.index = index;
+  }
+}
 
 Interpreter() {
   globals.define("clock", new LoxCallable() {
@@ -69,22 +81,29 @@ Interpreter() {
   }
 
   @Override
-  public Void visitVarStmt(Stmt.Var stmt) {
-    Object value;
-if (stmt.initializer != null) {
-  value = evaluate(stmt.initializer);
-} else {
-  value = Environment.uninitialized(); // see next step, or access directly if you prefer
-}
-environment.define(stmt.name.lexeme, value);
-    return null;
+public Void visitVarStmt(Stmt.Var stmt) {
+  Object value = null;
+  if (stmt.initializer != null) {
+    value = evaluate(stmt.initializer);
   }
 
-  @Override
-  public Void visitBlockStmt(Stmt.Block stmt) {
-    executeBlock(stmt.statements, new Environment(environment));
-    return null;
+  Integer slot = varDeclSlots.get(stmt);
+  if (slot != null) {
+    // local variable: store in current env slots
+    environment.defineAt(slot, value);
+  } else {
+    // global variable
+    environment.define(stmt.name.lexeme, value);
   }
+  return null;
+}
+
+  @Override
+public Void visitBlockStmt(Stmt.Block stmt) {
+  int slots = blockSlotCounts.getOrDefault(stmt, 0);
+  executeBlock(stmt.statements, new Environment(environment, slots));
+  return null;
+}
 
   // ---------------- Expressions ----------------
 
@@ -180,13 +199,13 @@ public Object visitVariableExpr(Expr.Variable expr) {
   return lookUpVariable(expr.name, expr);
 }
 
-  @Override
+@Override
 public Object visitAssignExpr(Expr.Assign expr) {
   Object value = evaluate(expr.value);
 
-  Integer distance = locals.get(expr);
-  if (distance != null) {
-    environment.assignAt(distance, expr.name, value);
+  Local local = locals.get(expr);
+  if (local != null) {
+    environment.assignAt(local.depth, local.index, value);
   } else {
     globals.assign(expr.name, value);
   }
@@ -339,17 +358,33 @@ private static class BreakSignal extends RuntimeException {
   }
 }
 
-void resolve(Expr expr, int depth) {
-  locals.put(expr, depth);
+void resolve(Expr expr, int depth, int index) {
+  locals.put(expr, new Local(depth, index));
+}
+
+void registerBlockSlots(Stmt.Block block, int slotCount) {
+  blockSlotCounts.put(block, slotCount);
+}
+
+void registerFunctionSlots(Stmt.Function function, int slotCount) {
+  functionSlotCounts.put(function, slotCount);
+}
+
+void registerVarSlot(Stmt.Var stmt, int index) {
+  varDeclSlots.put(stmt, index);
+}
+
+int getFunctionSlotCount(Stmt.Function function) {
+  Integer n = functionSlotCounts.get(function);
+  return (n == null) ? 0 : n;
 }
 
 private Object lookUpVariable(Token name, Expr expr) {
-  Integer distance = locals.get(expr);
-  if (distance != null) {
-    return environment.getAt(distance, name.lexeme);
-  } else {
-    return globals.get(name);
+  Local local = locals.get(expr);
+  if (local != null) {
+    return environment.getAt(local.depth, local.index);
   }
+  return globals.get(name);
 }
 
 }
