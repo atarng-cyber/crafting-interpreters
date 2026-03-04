@@ -257,6 +257,15 @@ public Void visitFunctionStmt(Stmt.Function stmt) {
 }
 
 @Override
+public Object visitFunctionExpr(Expr.Function expr) {
+  // Wrap it into a "declaration-like" object the runtime can execute.
+  // Easiest: add a second constructor to LoxFunction that accepts params/body directly,
+  // OR synthesize a Stmt.Function with a fake name.
+  LoxFunction function = LoxFunction.anonymous(expr, environment);
+  return function;
+}
+
+@Override
 public Void visitReturnStmt(Stmt.Return stmt) {
   Object value = null;
   if (stmt.value != null) value = evaluate(stmt.value);
