@@ -76,20 +76,47 @@ public String visitLogicalExpr(Expr.Logical expr) {
     System.out.println(new RpnPrinter().print(expression));
   }
 
-@Override
-public String visitCallExpr(Expr.Call expr) {
-  StringBuilder sb = new StringBuilder();
-  for (Expr arg : expr.arguments) {
-    sb.append(arg.accept(this)).append(" ");
-  }
-  sb.append(expr.callee.accept(this)).append(" call");
-  return sb.toString();
-}
 
 @Override
 public String visitFunctionExpr(Expr.Function expr) {
   // RPN for a function literal isn't super meaningful; just show a marker.
   // If you want: include param count.
   return "fun";
+}
+
+@Override
+public String visitCallExpr(Expr.Call expr) {
+  StringBuilder b = new StringBuilder();
+  b.append(expr.callee.accept(this));
+  for (Expr arg : expr.arguments) {
+    b.append(" ").append(arg.accept(this));
+  }
+  b.append(" call");
+  return b.toString();
+}
+
+@Override
+public String visitGetExpr(Expr.Get expr) {
+  return expr.object.accept(this) + " " + expr.name.lexeme + " get";
+}
+
+@Override
+public String visitSetExpr(Expr.Set expr) {
+  return expr.object.accept(this) + " " + expr.value.accept(this) + " " + expr.name.lexeme + " set";
+}
+
+@Override
+public String visitThisExpr(Expr.This expr) {
+  return "this";
+}
+
+@Override
+public String visitSuperExpr(Expr.Super expr) {
+  return "super " + expr.method.lexeme;
+}
+
+@Override
+public String visitInnerExpr(Expr.Inner expr) {
+  return "inner";
 }
 }

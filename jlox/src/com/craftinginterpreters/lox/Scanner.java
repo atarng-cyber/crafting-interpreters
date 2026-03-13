@@ -32,6 +32,7 @@ class Scanner {
     keywords.put("return", RETURN);
     keywords.put("super",  SUPER);
     keywords.put("this",   THIS);
+  keywords.put("inner",  INNER);
     keywords.put("true",   TRUE);
     keywords.put("var",    VAR);
     keywords.put("while",  WHILE);

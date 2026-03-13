@@ -55,15 +55,6 @@ public String visitLogicalExpr(Expr.Logical expr) {
 
     return builder.toString();
   }
-@Override
-public String visitCallExpr(Expr.Call expr) {
-  // Basic display: (call callee arg1 arg2 ...)
-  List<Expr> args = expr.arguments;
-  Expr[] parts = new Expr[args.size() + 1];
-  parts[0] = expr.callee;
-  for (int i = 0; i < args.size(); i++) parts[i + 1] = args.get(i);
-  return parenthesize("call", parts);
-}
 
 @Override
 public String visitFunctionExpr(Expr.Function expr) {
@@ -71,4 +62,33 @@ public String visitFunctionExpr(Expr.Function expr) {
   return "<fun>";
 }
 
+@Override
+public String visitCallExpr(Expr.Call expr) {
+  return parenthesize("call", expr.callee);
+}
+
+@Override
+public String visitGetExpr(Expr.Get expr) {
+  return parenthesize("." + expr.name.lexeme, expr.object);
+}
+
+@Override
+public String visitSetExpr(Expr.Set expr) {
+  return parenthesize("set " + expr.name.lexeme, expr.object, expr.value);
+}
+
+@Override
+public String visitThisExpr(Expr.This expr) {
+  return "this";
+}
+
+@Override
+public String visitSuperExpr(Expr.Super expr) {
+  return "super." + expr.method.lexeme;
+}
+
+@Override
+public String visitInnerExpr(Expr.Inner expr) {
+  return "inner";
+}
 }

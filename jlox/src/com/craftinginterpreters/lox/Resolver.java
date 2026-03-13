@@ -29,17 +29,27 @@ private final Stack<Object> scopeOwner = new Stack<>();
 
 private enum FunctionType {
     NONE,
-    FUNCTION
+    FUNCTION,
+    INITIALIZER,
+    METHOD
   }
+
+  private enum ClassType {
+  NONE,
+  CLASS,
+  SUBCLASS
+}
 
   private enum LoopType {
   NONE,
   WHILE
 }
 
+private ClassType currentClass = ClassType.NONE;
+
 private LoopType currentLoop = LoopType.NONE;
 
-  private FunctionType currentFunction = FunctionType.NONE;
+private FunctionType currentFunction = FunctionType.NONE;
 
   Resolver(Interpreter interpreter) {
     this.interpreter = interpreter;
@@ -198,7 +208,12 @@ public Void visitVarStmt(Stmt.Var stmt) {
     if (currentFunction == FunctionType.NONE) {
       Lox.error(stmt.keyword, "Can't return from top-level code.");
     }
-    if (stmt.value != null) resolve(stmt.value);
+    if (stmt.value != null) {
+      if (currentFunction == FunctionType.INITIALIZER) {
+    Lox.error(stmt.keyword, "Can't return a value from an initializer.");
+  }
+    resolve(stmt.value);
+}
     return null;
   }
 
@@ -246,15 +261,6 @@ public Void visitVariableExpr(Expr.Variable expr) {
     return null;
   }
 
-
-  @Override
-  public Void visitCallExpr(Expr.Call expr) {
-    resolve(expr.callee);
-    for (Expr argument : expr.arguments) {
-      resolve(argument);
-    }
-    return null;
-  }
 
   @Override
   public Void visitGroupingExpr(Expr.Grouping expr) {
@@ -317,5 +323,115 @@ public Void visitBreakStmt(Stmt.Break stmt) {
       return;
     }
   }
+}
+
+@Override
+public Void visitClassStmt(Stmt.Class stmt) {
+  ClassType enclosingClass = currentClass;
+  currentClass = ClassType.CLASS;
+
+  declare(stmt.name);
+  define(stmt.name);
+
+  // Handle superclass if present.
+  if (stmt.superclass != null) {
+    currentClass = ClassType.SUBCLASS;
+    resolve(stmt.superclass);
+    if (stmt.name.lexeme.equals(stmt.superclass.name.lexeme)) {
+      Lox.error(stmt.superclass.name,
+          "A class can't inherit from itself.");
+    }
+  }
+
+  if (stmt.superclass != null) {
+    beginScope(stmt);
+    // declare 'super' in that scope
+    Token superToken = new Token(TokenType.SUPER, "super", null, 0);
+    declare(superToken);
+    define(superToken);
+  }
+
+  // Create a scope for 'this' visible to methods.
+  beginScope(stmt);
+  Token thisToken = new Token(TokenType.THIS, "this", null, 0);
+  declare(thisToken);
+  define(thisToken);
+  // declare 'inner' in the same scope so inner resolves inside methods
+  Token innerToken = new Token(TokenType.INNER, "inner", null, 0);
+  declare(innerToken);
+  define(innerToken);
+
+  // Resolve methods.
+  for (Stmt.Function method : stmt.methods) {
+    FunctionType declaration = FunctionType.METHOD;
+    if (method.name.lexeme.equals("init")) {
+      declaration = FunctionType.INITIALIZER;
+    }
+    resolveFunction(method, declaration);
+  }
+
+  endScope(); // pop 'this' scope
+  if (stmt.superclass != null) endScope(); // pop 'super' scope
+
+  currentClass = enclosingClass;
+  return null;
+}
+
+@Override
+public Void visitSuperExpr(Expr.Super expr) {
+  if (currentClass == ClassType.NONE) {
+    Lox.error(expr.keyword,
+        "Can't use 'super' outside of a class.");
+  } else if (currentClass != ClassType.SUBCLASS) {
+    Lox.error(expr.keyword,
+        "Can't use 'super' in a class with no superclass.");
+  }
+
+  resolveLocal(expr, expr.keyword);
+  return null;
+}
+
+@Override
+public Void visitInnerExpr(Expr.Inner expr) {
+  if (currentClass == ClassType.NONE) {
+    Lox.error(expr.keyword, "Can't use 'inner' outside of a class.");
+  }
+
+  resolveLocal(expr, expr.keyword);
+  return null;
+}
+
+@Override
+public Void visitCallExpr(Expr.Call expr) {
+  resolve(expr.callee);
+  for (Expr argument : expr.arguments) resolve(argument);
+  return null;
+}
+
+@Override
+public Void visitGetExpr(Expr.Get expr) {
+  resolve(expr.object);
+  return null;
+}
+
+@Override
+public Void visitSetExpr(Expr.Set expr) {
+  resolve(expr.value);
+  resolve(expr.object);
+  return null;
+}
+
+@Override
+public Void visitThisExpr(Expr.This expr) {
+  if (currentClass == ClassType.NONE) {
+    Lox.error(expr.keyword, "Can't use 'this' outside of a class.");
+    return null;
+  }
+
+  // IMPORTANT:
+  // To keep compatibility with your Challenge 4 "slot locals",
+  // we do NOT force 'this' through the locals table here.
+  // The interpreter will look it up by name from the environment.
+  return null;
 }
 }

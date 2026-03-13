@@ -118,4 +118,13 @@ class Environment {
     }
     env.slots[index] = value;
   }
+
+    /**
+   * Compatibility helper: return the value of a variable by name at a given
+   * distance in the environment chain. This keeps older call sites (which use
+   * name-based lookups like closure.getAt(0, "this")) working.
+   */
+  Object getAt(int distance, String name) {
+    return ancestor(distance).values.get(name);
+  }
 }
