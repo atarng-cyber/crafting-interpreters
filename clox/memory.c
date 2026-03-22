@@ -9,9 +9,7 @@ void* reallocate(void* pointer, size_t oldSize, size_t newSize) {
     return NULL;
   }
 
-  /* Diagnostic: log realloc calls to track possible corruption. */
-  fprintf(stderr, "reallocate: ptr=%p oldSize=%zu newSize=%zu\n",
-          pointer, oldSize, newSize);
+  /* Diagnostic logging removed for production. */
 
   void* result = realloc(pointer, newSize);
   if (result == NULL) {

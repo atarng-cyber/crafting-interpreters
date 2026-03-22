@@ -13,7 +13,7 @@ static void resetStack() {
 
 void initVM() {
   resetStack();
-  printf("initVM: stack=%p stackTopIndex=%d\n", (void*)vm.stack, vm.stackTop);
+  /* initVM: stack tracing removed for normal operation. */
 }
 
 void freeVM() {
@@ -112,6 +112,12 @@ static InterpretResult run() {
         push(-pop());
         break;
       }
+      case OP_PRINT: {
+        Value value = pop();
+        printValue(value);
+        printf("\n");
+        break;
+      }
       case OP_RETURN: {
         return INTERPRET_OK;
       }
@@ -125,9 +131,27 @@ static InterpretResult run() {
 #undef READ_BYTE
 }
 
-InterpretResult interpret(Chunk* chunk) {
-  vm.chunk = chunk;
+/* At this stage of the book we accept source code and hand off to the
+ * compiler/scanner pipeline. The compiler will (eventually) emit bytecode
+ * into the current chunk and drive the VM. For now we just invoke the
+ * compiler entry point.
+ */
+#include "compiler.h"
+
+InterpretResult interpret(const char* source) {
+  Chunk chunk;
+  initChunk(&chunk);
+
+  if (!compile(source, &chunk)) {
+    freeChunk(&chunk);
+    return INTERPRET_COMPILE_ERROR;
+  }
+
+  vm.chunk = &chunk;
   vm.ip = vm.chunk->code;
-  resetStack();
-  return run();
+
+  InterpretResult result = run();
+
+  freeChunk(&chunk);
+  return result;
 }

@@ -3,11 +3,6 @@
 
 #include "chunk.h"
 #include "memory.h"
-#include <stdio.h>
-#include "vm.h"
-
-/* Extern VM so we can detect accidental corruption during writes. */
-extern VM vm;
 
 void initChunk(Chunk* chunk) {
   chunk->count = 0;
@@ -57,10 +52,7 @@ void writeChunk(Chunk* chunk, uint8_t byte, int line) {
     }
   }
   chunk->count++;
-  /* Diagnostic: print VM stackTop to detect corruption during chunk writes. */
-  /* Note: remove or guard this behind a debug flag in production. */
-  fprintf(stderr, "writeChunk: count=%d capacity=%d code=%p stackTopIndex=%d\n",
-    chunk->count, chunk->capacity, (void*)chunk->code, vm.stackTop);
+  /* Debug logging removed. */
 }
 
 int addConstant(Chunk* chunk, Value value) {
