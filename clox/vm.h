@@ -17,7 +17,10 @@ typedef struct {
   uint8_t* ip;
   Value stack[STACK_MAX];
   int stackTop; /* index of next free slot (0 when empty) */
+  struct Obj* objects;
 } VM;
+
+extern VM vm;
 
 void initVM();
 void freeVM();
