@@ -37,7 +37,7 @@ ObjString* copyString(const char* chars, int length) {
   ObjString* string = allocateStringInternal(length, hash);
   memcpy(string->chars, chars, length);
   string->chars[length] = '\0';
-  tableSet(&vm.strings, string, NIL_VAL);
+    tableSet(&vm.strings, OBJ_VAL(string), NIL_VAL);
   return string;
 }
 
@@ -59,7 +59,7 @@ ObjString* takeString(char* chars, int length) {
   string->ownsChars = true;
   string->hash = hash;
   string->chars = chars;
-  tableSet(&vm.strings, string, NIL_VAL);
+    tableSet(&vm.strings, OBJ_VAL(string), NIL_VAL);
   return string;
 }
 
