@@ -13,10 +13,11 @@ struct Obj {
   struct Obj* next;
 };
 
-typedef struct {
+typedef struct ObjString {
   struct Obj obj;
   int length;
   bool ownsChars; /* true if chars pointer must be freed separately */
+  uint32_t hash;
   char* chars;
 } ObjString;
 

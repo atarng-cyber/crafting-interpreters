@@ -54,9 +54,11 @@ void initVM() {
   resetStack();
   /* initVM: stack tracing removed for normal operation. */
   vm.objects = NULL;
+  initTable(&vm.strings);
 }
 
 void freeVM() {
+  freeTable(&vm.strings);
   freeObjects();
 }
 
