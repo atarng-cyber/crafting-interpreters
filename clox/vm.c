@@ -54,10 +54,12 @@ void initVM() {
   resetStack();
   /* initVM: stack tracing removed for normal operation. */
   vm.objects = NULL;
+  initTable(&vm.globals);
   initTable(&vm.strings);
 }
 
 void freeVM() {
+  freeTable(&vm.globals);
   freeTable(&vm.strings);
   freeObjects();
 }
@@ -101,8 +103,9 @@ static InterpretResult run() {
     disassembleInstruction(vm.chunk, (int)(vm.ip - vm.chunk->code));
 #endif
 
-    /* Helper macro for binary ops that produce a Value via a wrapper macro. */
 #define READ_CONSTANT() (vm.chunk->constants.values[READ_BYTE()])
+#define READ_STRING() AS_STRING(READ_CONSTANT())
+  /* Helper macro for binary ops that produce a Value via a wrapper macro. */
 #define BINARY_OP(valueType, op) \
     do { \
       if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { \
@@ -135,9 +138,10 @@ static InterpretResult run() {
   push(vm.chunk->constants.values[constantIndex]);
   break;
 }
-      case OP_NIL: push(NIL_VAL); break;
-      case OP_TRUE: push(BOOL_VAL(true)); break;
-      case OP_FALSE: push(BOOL_VAL(false)); break;
+  case OP_NIL: push(NIL_VAL); break;
+  case OP_TRUE: push(BOOL_VAL(true)); break;
+  case OP_FALSE: push(BOOL_VAL(false)); break;
+  case OP_POP: pop(); break;
       case OP_ADD: {
         if (IS_OBJ(peek(0)) && IS_OBJ(peek(1)) && IS_STRING(peek(0)) && IS_STRING(peek(1))) {
           concatenate();
@@ -191,6 +195,31 @@ static InterpretResult run() {
         Value value = pop();
         printValue(value);
         printf("\n");
+        break;
+      }
+      case OP_DEFINE_GLOBAL: {
+        ObjString* name = READ_STRING();
+        tableSet(&vm.globals, OBJ_VAL(name), peek(0));
+        pop();
+        break;
+      }
+      case OP_GET_GLOBAL: {
+        ObjString* name = READ_STRING();
+        Value value;
+        if (!tableGet(&vm.globals, OBJ_VAL(name), &value)) {
+          runtimeError("Undefined variable '%s'.", name->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        push(value);
+        break;
+      }
+      case OP_SET_GLOBAL: {
+        ObjString* name = READ_STRING();
+        if (tableSet(&vm.globals, OBJ_VAL(name), peek(0))) {
+          tableDelete(&vm.globals, OBJ_VAL(name));
+          runtimeError("Undefined variable '%s'.", name->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
         break;
       }
       case OP_RETURN: {
