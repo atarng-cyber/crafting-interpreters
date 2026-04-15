@@ -170,7 +170,19 @@ static uint8_t parseVariable(const char* errorMessage) {
 }
 
 static uint8_t identifierConstant(Token* name) {
-  return makeConstant(OBJ_VAL(copyString(name->start, name->length)));
+  /* Intern the identifier string first so identical lexemes have the same
+     ObjString* pointer. Then reuse an existing constant in the current
+     chunk if one already holds that ObjString to avoid duplicate
+     constant entries. */
+  ObjString* interned = copyString(name->start, name->length);
+  Chunk* chunk = currentChunk();
+  for (int i = 0; i < chunk->constants.count; i++) {
+    Value v = chunk->constants.values[i];
+    if (IS_OBJ(v) && IS_STRING(v) && AS_STRING(v) == interned) {
+      return (uint8_t)i;
+    }
+  }
+  return makeConstant(OBJ_VAL(interned));
 }
 
 static void defineVariable(uint8_t global) {
