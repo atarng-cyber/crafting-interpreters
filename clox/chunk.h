@@ -31,6 +31,9 @@ typedef enum {
   OP_SET_LOCAL_LONG,
   OP_GET_GLOBAL_LONG,
   OP_SET_GLOBAL_LONG,
+  OP_JUMP_IF_FALSE,
+  OP_JUMP,
+  OP_LOOP,
   OP_RETURN,
 } OpCode;
 
