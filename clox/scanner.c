@@ -158,7 +158,17 @@ static TokenType identifierType() {
         }
       }
       break;
-    case 'v': return checkKeyword(1, 2, "ar", TOKEN_VAR);
+    case 'v':
+      if (scanner.current - scanner.start > 1) {
+        switch (scanner.start[1]) {
+          case 'a':
+            /* could be 'var' or 'val' */
+            if (scanner.current - scanner.start == 3 && memcmp(scanner.start + 1, "ar", 2) == 0) return TOKEN_VAR;
+            if (scanner.current - scanner.start == 3 && memcmp(scanner.start + 1, "al", 2) == 0) return TOKEN_VAL;
+            break;
+        }
+      }
+      return TOKEN_IDENTIFIER;
     case 'w': return checkKeyword(1, 4, "hile", TOKEN_WHILE);
   }
 

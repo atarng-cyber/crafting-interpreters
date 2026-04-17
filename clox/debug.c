@@ -77,7 +77,23 @@ int disassembleInstruction(Chunk* chunk, int offset) {
     case OP_NOT:
       return simpleInstruction("OP_NOT", offset);
     case OP_CONSTANT_LONG:
-      return constantLongInstruction("OP_CONSTANT_LONG", chunk, offset);
+      return simpleInstruction("OP_TRUE", offset);
+    case OP_GET_LOCAL_LONG: {
+      uint32_t b1 = chunk->code[offset + 1];
+      uint32_t b2 = chunk->code[offset + 2];
+      uint32_t b3 = chunk->code[offset + 3];
+      uint32_t index = (b1) | (b2 << 8) | (b3 << 16);
+      printf("%-16s %4d\n", "OP_GET_LOCAL_LONG", index);
+      return offset + 4;
+    }
+    case OP_SET_LOCAL_LONG: {
+      uint32_t b1 = chunk->code[offset + 1];
+      uint32_t b2 = chunk->code[offset + 2];
+      uint32_t b3 = chunk->code[offset + 3];
+      uint32_t index = (b1) | (b2 << 8) | (b3 << 16);
+      printf("%-16s %4d\n", "OP_SET_LOCAL_LONG", index);
+      return offset + 4;
+    }
     case OP_ADD:
       return simpleInstruction("OP_ADD", offset);
     case OP_SUBTRACT:
@@ -95,10 +111,34 @@ int disassembleInstruction(Chunk* chunk, int offset) {
     case OP_DEFINE_GLOBAL:
       return constantInstruction("OP_DEFINE_GLOBAL", chunk,
                                  offset);
+    case OP_DEFINE_GLOBAL_LONG: {
+      uint32_t b1 = chunk->code[offset + 1];
+      uint32_t b2 = chunk->code[offset + 2];
+      uint32_t b3 = chunk->code[offset + 3];
+      uint32_t index = (b1) | (b2 << 8) | (b3 << 16);
+      printf("%-16s %4d\n", "OP_DEFINE_GLOBAL_LONG", index);
+      return offset + 4;
+    }
     case OP_GET_GLOBAL:
       return constantInstruction("OP_GET_GLOBAL", chunk, offset);
     case OP_SET_GLOBAL:
       return constantInstruction("OP_SET_GLOBAL", chunk, offset);
+    case OP_GET_GLOBAL_LONG: {
+      uint32_t b1 = chunk->code[offset + 1];
+      uint32_t b2 = chunk->code[offset + 2];
+      uint32_t b3 = chunk->code[offset + 3];
+      uint32_t index = (b1) | (b2 << 8) | (b3 << 16);
+      printf("%-16s %4d\n", "OP_GET_GLOBAL_LONG", index);
+      return offset + 4;
+    }
+    case OP_SET_GLOBAL_LONG: {
+      uint32_t b1 = chunk->code[offset + 1];
+      uint32_t b2 = chunk->code[offset + 2];
+      uint32_t b3 = chunk->code[offset + 3];
+      uint32_t index = (b1) | (b2 << 8) | (b3 << 16);
+      printf("%-16s %4d\n", "OP_SET_GLOBAL_LONG", index);
+      return offset + 4;
+    }
     case OP_RETURN:
       return simpleInstruction("OP_RETURN", offset);
     default:

@@ -7,7 +7,11 @@
 #include "compiler.h"
 #include "scanner.h"
 #include "chunk.h"
+#include "table.h"
+#include "memory.h"
 #include "object.h"
+/* for DEBUG_PRINT_CODE disassembly */
+#include "debug.h"
 
 typedef void (*ParseFn)(bool canAssign);
 
@@ -94,17 +98,13 @@ static void emitReturn() {
   emitByte(OP_RETURN);
 }
 
-static uint8_t makeConstant(Value value) {
-  int constant = addConstant(currentChunk(), value);
-  if (constant > UINT8_MAX) {
-    error("Too many constants in one chunk.");
-    return 0;
-  }
-  return (uint8_t)constant;
+static int makeConstant(Value value) {
+  return addConstant(currentChunk(), value);
 }
 
 static void emitConstant(Value value) {
-  emitBytes(OP_CONSTANT, makeConstant(value));
+  /* writeConstant chooses OP_CONSTANT or OP_CONSTANT_LONG as needed. */
+  writeConstant(currentChunk(), value, parser.previous.line);
 }
 
 /* Precedence levels for Pratt parser */
@@ -129,14 +129,19 @@ typedef struct {
 } ParseRule;
 
 typedef struct {
-  Token name;
+  ObjString* name; /* interned string pointer */
   int depth;
+  int prev; /* previous slot index for shadowing restoration */
+  bool isMutable;
 } Local;
 
 typedef struct {
-  Local locals[UINT8_COUNT];
+  Local* locals;
   int localCount;
+  int localsCapacity;
   int scopeDepth;
+  Table localsTable; /* map from ObjString* to current slot index */
+  Table globalsImmutable; /* set of global names declared immutable */
 } Compiler;
 
 static Compiler* current = NULL;
@@ -151,14 +156,14 @@ static void expressionStatement(void);
 static void synchronize(void);
 
 /* Additional forward declarations for variable helpers defined later. */
-static void declareVariable(void);
+static void declareVariable(bool isMutable);
 static bool identifiersEqual(Token* a, Token* b);
 
 /* Variable / declaration helpers */
-static uint8_t parseVariable(const char* errorMessage);
-static uint8_t identifierConstant(Token* name);
+static int parseVariable(const char* errorMessage, bool isMutable);
+static int identifierConstant(Token* name);
 static void defineVariable(uint8_t global);
-static void varDeclaration(void);
+static void varDeclaration(bool isMutable);
 static void namedVariable(Token name, bool canAssign);
 static void variable(bool canAssign);
 
@@ -170,7 +175,9 @@ static void block(void);
 /* Declaration / statement parsing */
 static void declaration(void) {
   if (match(TOKEN_VAR)) {
-    varDeclaration();
+    varDeclaration(true);
+  } else if (match(TOKEN_VAL)) {
+    varDeclaration(false);
   } else {
     statement();
   }
@@ -179,8 +186,12 @@ static void declaration(void) {
 }
 
 static void initCompiler(Compiler* compiler) {
+  compiler->locals = NULL;
   compiler->localCount = 0;
+  compiler->localsCapacity = 0;
   compiler->scopeDepth = 0;
+  initTable(&compiler->localsTable);
+  initTable(&compiler->globalsImmutable);
   current = compiler;
 }
 
@@ -196,15 +207,15 @@ static void statement(void) {
   }
 }
 
-static uint8_t parseVariable(const char* errorMessage) {
+static int parseVariable(const char* errorMessage, bool isMutable) {
   consume(TOKEN_IDENTIFIER, errorMessage);
-  declareVariable();
+  declareVariable(isMutable);
   if (current->scopeDepth > 0) return 0;
 
   return identifierConstant(&parser.previous);
 }
 
-static uint8_t identifierConstant(Token* name) {
+static int identifierConstant(Token* name) {
   /* Intern the identifier string first so identical lexemes have the same
      ObjString* pointer. Then reuse an existing constant in the current
      chunk if one already holds that ObjString to avoid duplicate
@@ -214,57 +225,92 @@ static uint8_t identifierConstant(Token* name) {
   for (int i = 0; i < chunk->constants.count; i++) {
     Value v = chunk->constants.values[i];
     if (IS_OBJ(v) && IS_STRING(v) && AS_STRING(v) == interned) {
-      return (uint8_t)i;
+      return i;
     }
   }
   return makeConstant(OBJ_VAL(interned));
 }
 
-static void addLocal(Token name) {
-  if (current->localCount == UINT8_COUNT) {
-    error("Too many local variables in function.");
-    return;
+static void ensureLocalCapacity(Compiler* compiler) {
+  if (compiler->localCount + 1 > compiler->localsCapacity) {
+    int old = compiler->localsCapacity;
+    int newCap = GROW_CAPACITY(old);
+    compiler->locals = GROW_ARRAY(Local, compiler->locals, old, newCap);
+    compiler->localsCapacity = newCap;
   }
-
-  Local* local = &current->locals[current->localCount++];
-  local->name = name;
-  local->depth = -1;
 }
 
-static void declareVariable() {
+/* Emit either the short (1-byte index) or long (3-byte index) local op. */
+static void emitLocal(uint8_t shortOp, uint8_t longOp, uint32_t index) {
+  if (index <= UINT8_MAX) {
+    emitBytes(shortOp, (uint8_t)index);
+  } else {
+    emitByte(longOp);
+    emitByte((uint8_t)(index & 0xFF));
+    emitByte((uint8_t)((index >> 8) & 0xFF));
+    emitByte((uint8_t)((index >> 16) & 0xFF));
+  }
+}
+
+static void addLocal(Token name) {
+  ensureLocalCapacity(current);
+
+  ObjString* interned = copyString(name.start, name.length);
+
+  int slot = current->localCount;
+  Local* local = &current->locals[slot];
+  local->name = interned;
+  local->depth = -1;
+  local->prev = -1;
+  local->isMutable = true; /* default mutable; var/val will adjust */
+
+  Value prevVal;
+  if (tableGet(&current->localsTable, OBJ_VAL(interned), &prevVal)) {
+    local->prev = (int)AS_NUMBER(prevVal);
+  }
+
+  tableSet(&current->localsTable, OBJ_VAL(interned), NUMBER_VAL(slot));
+  current->localCount++;
+}
+
+static void declareVariable(bool isMutable) {
   if (current->scopeDepth == 0) return;
 
-  Token* name = &parser.previous;
+  Token* nameToken = &parser.previous;
+  ObjString* interned = copyString(nameToken->start, nameToken->length);
+
   for (int i = current->localCount - 1; i >= 0; i--) {
     Local* local = &current->locals[i];
     if (local->depth != -1 && local->depth < current->scopeDepth) {
       break;
     }
 
-    if (identifiersEqual(name, &local->name)) {
+    if (local->name == interned) {
       error("Already a variable with this name in this scope.");
     }
   }
 
-  addLocal(*name);
+  addLocal(*nameToken);
+  /* Set mutability on the newly added local. */
+  current->locals[current->localCount - 1].isMutable = isMutable;
 }
 
+/* identifiers are interned into ObjString*; pointer equality is sufficient. */
 static bool identifiersEqual(Token* a, Token* b) {
-  if (a->length != b->length) return false;
-  return memcmp(a->start, b->start, a->length) == 0;
+  (void)a; (void)b; /* not used under new scheme */
+  return false;
 }
 
 static int resolveLocal(Compiler* compiler, Token* name) {
-  for (int i = compiler->localCount - 1; i >= 0; i--) {
-    Local* local = &compiler->locals[i];
-    if (identifiersEqual(name, &local->name)) {
-      if (local->depth == -1) {
-        error("Can't read local variable in its own initializer.");
-      }
-      return i;
+  ObjString* interned = copyString(name->start, name->length);
+  Value val;
+  if (tableGet(&compiler->localsTable, OBJ_VAL(interned), &val)) {
+    int slot = (int)AS_NUMBER(val);
+    if (compiler->locals[slot].depth == -1) {
+      error("Can't read local variable in its own initializer.");
     }
+    return slot;
   }
-
   return -1;
 }
 
@@ -278,11 +324,22 @@ static void defineVariable(uint8_t global) {
     return;
   }
 
-  emitBytes(OP_DEFINE_GLOBAL, global);
+  /* Emit DEFINE_GLOBAL or DEFINE_GLOBAL_LONG depending on constant index. */
+  if (global <= UINT8_MAX) {
+    emitBytes(OP_DEFINE_GLOBAL, global);
+  } else {
+    emitByte(OP_DEFINE_GLOBAL_LONG);
+    emitByte((uint8_t)(global & 0xFF));
+    emitByte((uint8_t)((global >> 8) & 0xFF));
+    emitByte((uint8_t)((global >> 16) & 0xFF));
+  }
 }
 
-static void varDeclaration(void) {
-  uint8_t global = parseVariable("Expect variable name.");
+static void varDeclaration(bool isMutable) {
+  /* Save the name token now because parsing the initializer will advance
+    the parser and change parser.previous. */
+  int global = parseVariable("Expect variable name.", isMutable);
+  Token nameToken = parser.previous;
 
   if (match(TOKEN_EQUAL)) {
     expression();
@@ -293,25 +350,57 @@ static void varDeclaration(void) {
           "Expect ';' after variable declaration.");
 
   defineVariable(global);
+  /* If this is a top-level immutable (val) declaration, record it. */
+  if (!isMutable && current->scopeDepth == 0) {
+    int constIndex = identifierConstant(&nameToken);
+    ObjString* name = AS_STRING(currentChunk()->constants.values[constIndex]);
+    tableSet(&current->globalsImmutable, OBJ_VAL(name), BOOL_VAL(true));
+  }
 }
 
 static void namedVariable(Token name, bool canAssign) {
-  uint8_t getOp, setOp;
   int arg = resolveLocal(current, &name);
   if (arg != -1) {
-    getOp = OP_GET_LOCAL;
-    setOp = OP_SET_LOCAL;
-  } else {
-    arg = identifierConstant(&name);
-    getOp = OP_GET_GLOBAL;
-    setOp = OP_SET_GLOBAL;
+    /* local */
+    if (canAssign && match(TOKEN_EQUAL)) {
+      if (!current->locals[arg].isMutable) {
+        error("Cannot assign to immutable local variable.");
+      }
+      expression();
+      emitLocal(OP_SET_LOCAL, OP_SET_LOCAL_LONG, (uint32_t)arg);
+    } else {
+      emitLocal(OP_GET_LOCAL, OP_GET_LOCAL_LONG, (uint32_t)arg);
+    }
+    return;
   }
 
+  /* global */
+  arg = identifierConstant(&name);
   if (canAssign && match(TOKEN_EQUAL)) {
+    /* If this global is immutable (val), compile-time error. */
+    ObjString* nameObj = AS_STRING(currentChunk()->constants.values[arg]);
+    Value imm;
+    if (tableGet(&current->globalsImmutable, OBJ_VAL(nameObj), &imm)) {
+      error("Cannot assign to immutable global variable.");
+    }
     expression();
-    emitBytes((uint8_t)setOp, (uint8_t)arg);
+    if (arg <= UINT8_MAX) {
+      emitBytes(OP_SET_GLOBAL, (uint8_t)arg);
+    } else {
+      emitByte(OP_SET_GLOBAL_LONG);
+      emitByte((uint8_t)(arg & 0xFF));
+      emitByte((uint8_t)((arg >> 8) & 0xFF));
+      emitByte((uint8_t)((arg >> 16) & 0xFF));
+    }
   } else {
-    emitBytes((uint8_t)getOp, (uint8_t)arg);
+    if (arg <= UINT8_MAX) {
+      emitBytes(OP_GET_GLOBAL, (uint8_t)arg);
+    } else {
+      emitByte(OP_GET_GLOBAL_LONG);
+      emitByte((uint8_t)(arg & 0xFF));
+      emitByte((uint8_t)((arg >> 8) & 0xFF));
+      emitByte((uint8_t)((arg >> 16) & 0xFF));
+    }
   }
 }
 
@@ -329,6 +418,14 @@ static void endScope() {
   while (current->localCount > 0 &&
          current->locals[current->localCount - 1].depth >
             current->scopeDepth) {
+    Local* local = &current->locals[current->localCount - 1];
+    ObjString* name = local->name;
+    int prev = local->prev;
+    if (prev == -1) {
+      tableDelete(&current->localsTable, OBJ_VAL(name));
+    } else {
+      tableSet(&current->localsTable, OBJ_VAL(name), NUMBER_VAL(prev));
+    }
     emitByte(OP_POP);
     current->localCount--;
   }
@@ -508,6 +605,7 @@ static void synchronize() {
       case TOKEN_CLASS:
       case TOKEN_FUN:
       case TOKEN_VAR:
+      case TOKEN_VAL:
       case TOKEN_FOR:
       case TOKEN_IF:
       case TOKEN_WHILE:
@@ -530,6 +628,14 @@ static void endCompiler() {
     disassembleChunk(currentChunk(), "code");
   }
 #endif
+  /* Free resources allocated for locals table/array. */
+  freeTable(&current->localsTable);
+  freeTable(&current->globalsImmutable);
+  if (current->locals != NULL) {
+    FREE_ARRAY(Local, current->locals, current->localsCapacity);
+    current->locals = NULL;
+    current->localsCapacity = 0;
+  }
 }
 
 bool compile(const char* source, Chunk* chunk) {
