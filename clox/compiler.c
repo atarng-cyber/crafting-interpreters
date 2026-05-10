@@ -161,16 +161,34 @@ typedef struct {
   int depth;
   int prev; /* previous slot index for shadowing restoration */
   bool isMutable;
+  bool isCaptured;
 } Local;
 
-typedef struct {
+/* Forward declare the struct tag so pointers to it can be used inside the
+   definition. */
+typedef struct Compiler Compiler;
+
+struct Compiler {
   Local* locals;
   int localCount;
   int localsCapacity;
   int scopeDepth;
   Table localsTable; /* map from ObjString* to current slot index */
   Table globalsImmutable; /* set of global names declared immutable */
-} Compiler;
+  /* Loop stack for continue handling: parallel arrays of loop start offsets
+     and the scope depth at the loop entry. */
+  int* loopStarts;
+  int* loopScopeDepths;
+  int loopCount;
+  int loopCapacity;
+  struct Compiler* enclosing; /* for nested function compilation */
+  ObjFunction* function;     /* function being compiled, if any */
+  /* Upvalue descriptors collected while compiling a nested function. */
+  uint8_t* upvalueIsLocal;
+  uint8_t* upvalueIndex;
+  int upvalueCount;
+  int upvalueCapacity;
+};
 
 static Compiler* current = NULL;
 
@@ -187,6 +205,16 @@ static void whileStatement(void);
 static void forStatement(void);
 static void and_(bool canAssign);
 static void or_(bool canAssign);
+static void switchStatement(void);
+static void continueStatement(void);
+static void call_(bool canAssign);
+static void funDeclaration(void);
+static ObjFunction* compileFunction(void);
+static void endCompiler(void);
+
+/* Loop stack helpers */
+static void pushLoopStart(int loopStart);
+static void popLoopStart(void);
 
 /* Additional forward declarations for variable helpers defined later. */
 static void declareVariable(bool isMutable);
@@ -211,6 +239,8 @@ static void declaration(void) {
     varDeclaration(true);
   } else if (match(TOKEN_VAL)) {
     varDeclaration(false);
+  } else if (match(TOKEN_FUN)) {
+    funDeclaration();
   } else {
     statement();
   }
@@ -225,6 +255,16 @@ static void initCompiler(Compiler* compiler) {
   compiler->scopeDepth = 0;
   initTable(&compiler->localsTable);
   initTable(&compiler->globalsImmutable);
+  compiler->loopStarts = NULL;
+  compiler->loopScopeDepths = NULL;
+  compiler->loopCount = 0;
+  compiler->loopCapacity = 0;
+  compiler->enclosing = NULL;
+  compiler->function = NULL;
+  compiler->upvalueIsLocal = NULL;
+  compiler->upvalueIndex = NULL;
+  compiler->upvalueCount = 0;
+  compiler->upvalueCapacity = 0;
   current = compiler;
 }
 
@@ -238,6 +278,10 @@ static void statement(void) {
     ifStatement();
   } else if (match(TOKEN_WHILE)) {
     whileStatement();
+  } else if (match(TOKEN_SWITCH)) {
+    switchStatement();
+  } else if (match(TOKEN_CONTINUE)) {
+    continueStatement();
   } else if (match(TOKEN_LEFT_BRACE)) {
     beginScope();
     block();
@@ -278,6 +322,27 @@ static void ensureLocalCapacity(Compiler* compiler) {
     compiler->locals = GROW_ARRAY(Local, compiler->locals, old, newCap);
     compiler->localsCapacity = newCap;
   }
+}
+
+static void ensureLoopCapacity(Compiler* compiler) {
+  if (compiler->loopCount + 1 > compiler->loopCapacity) {
+    int old = compiler->loopCapacity;
+    int newCap = GROW_CAPACITY(old);
+    compiler->loopStarts = GROW_ARRAY(int, compiler->loopStarts, old, newCap);
+    compiler->loopScopeDepths = GROW_ARRAY(int, compiler->loopScopeDepths, old, newCap);
+    compiler->loopCapacity = newCap;
+  }
+}
+
+static void pushLoopStart(int loopStart) {
+  ensureLoopCapacity(current);
+  current->loopStarts[current->loopCount] = loopStart;
+  current->loopScopeDepths[current->loopCount] = current->scopeDepth;
+  current->loopCount++;
+}
+
+static void popLoopStart(void) {
+  if (current->loopCount > 0) current->loopCount--;
 }
 
 /* Emit either the short (1-byte index) or long (3-byte index) local op. */
@@ -354,6 +419,49 @@ static int resolveLocal(Compiler* compiler, Token* name) {
   return -1;
 }
 
+/* Ensure the compiler's upvalue descriptor arrays have space for one more. */
+static void ensureUpvalueCapacity(Compiler* compiler) {
+  if (compiler->upvalueCapacity < compiler->upvalueCount + 1) {
+    int oldCap = compiler->upvalueCapacity;
+    int newCap = oldCap < 8 ? 8 : oldCap * 2;
+    compiler->upvalueIsLocal = realloc(compiler->upvalueIsLocal, sizeof(uint8_t) * newCap);
+    compiler->upvalueIndex = realloc(compiler->upvalueIndex, sizeof(uint8_t) * newCap);
+    compiler->upvalueCapacity = newCap;
+  }
+}
+
+/* Add an upvalue descriptor to the current compiler, returning its index. */
+static int addUpvalue(Compiler* compiler, uint8_t isLocal, uint8_t index) {
+  for (int i = 0; i < compiler->upvalueCount; i++) {
+    if (compiler->upvalueIsLocal[i] == isLocal && compiler->upvalueIndex[i] == index) {
+      return i;
+    }
+  }
+  ensureUpvalueCapacity(compiler);
+  int result = compiler->upvalueCount;
+  compiler->upvalueIsLocal[result] = isLocal;
+  compiler->upvalueIndex[result] = index;
+  compiler->upvalueCount++;
+  return result;
+}
+
+/* Try to resolve an upvalue by walking enclosing compilers. Returns index or -1. */
+static int resolveUpvalue(Compiler* compiler, Token* name) {
+  if (!compiler->enclosing) return -1;
+
+  int local = resolveLocal(compiler->enclosing, name);
+  if (local != -1) {
+    compiler->enclosing->locals[local].isCaptured = true;
+    return addUpvalue(compiler, 1, (uint8_t)local);
+  }
+
+  int up = resolveUpvalue(compiler->enclosing, name);
+  if (up != -1) {
+    return addUpvalue(compiler, 0, (uint8_t)up);
+  }
+
+  return -1;
+}
 static void markInitialized() {
   current->locals[current->localCount - 1].depth = current->scopeDepth;
 }
@@ -414,6 +522,24 @@ static void namedVariable(Token name, bool canAssign) {
     return;
   }
 
+  /* Not a local: try resolve as an upvalue in enclosing functions. */
+  int up = resolveUpvalue(current, &name);
+  if (up != -1) {
+    if (canAssign && match(TOKEN_EQUAL)) {
+      expression();
+      if (up > UINT8_MAX) {
+        error("Too many upvalues in function (limit 255).");
+      }
+      emitBytes(OP_SET_UPVALUE, (uint8_t)up);
+    } else {
+      if (up > UINT8_MAX) {
+        error("Too many upvalues in function (limit 255).");
+      }
+      emitBytes(OP_GET_UPVALUE, (uint8_t)up);
+    }
+    return;
+  }
+
   /* global */
   arg = identifierConstant(&name);
   if (canAssign && match(TOKEN_EQUAL)) {
@@ -466,7 +592,11 @@ static void endScope() {
     } else {
       tableSet(&current->localsTable, OBJ_VAL(name), NUMBER_VAL(prev));
     }
-    emitByte(OP_POP);
+    if (local->isCaptured) {
+      emitByte(OP_CLOSE_UPVALUE);
+    } else {
+      emitByte(OP_POP);
+    }
     current->localCount--;
   }
 }
@@ -572,7 +702,7 @@ static void ifStatement(void);
 static void whileStatement(void);
 static void forStatement(void);
 ParseRule rules[] = {
-  [TOKEN_LEFT_PAREN]    = {grouping, NULL,   PREC_NONE},
+  [TOKEN_LEFT_PAREN]    = {grouping, call_,   PREC_CALL},
   [TOKEN_RIGHT_PAREN]   = {NULL,     NULL,   PREC_NONE},
   [TOKEN_LEFT_BRACE]    = {NULL,     NULL,   PREC_NONE},
   [TOKEN_RIGHT_BRACE]   = {NULL,     NULL,   PREC_NONE},
@@ -644,6 +774,136 @@ static void parsePrecedence(Precedence precedence) {
 
 static void expression(void) {
   parsePrecedence(PREC_ASSIGNMENT);
+}
+
+/* call parsing: (callable args...) */
+static void call_(bool canAssign) {
+  /* Parse argument list and emit OP_CALL with arg count. */
+  int argCount = 0;
+  if (!check(TOKEN_RIGHT_PAREN)) {
+    do {
+      expression();
+      argCount++;
+      if (argCount > 255) error("Can't have more than 255 arguments.");
+    } while (match(TOKEN_COMMA));
+  }
+  consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+  emitBytes(OP_CALL, (uint8_t)argCount);
+}
+
+/* Compile a function declared with 'fun' into an ObjFunction constant and
+   emit an OP_CLOSURE that captures it. This simplified version creates a
+   new ObjFunction and copies the current chunk into it. Full upvalue
+   descriptor wiring is left for the next step. */
+static ObjFunction* compileFunction(void) {
+  /* Create a new ObjFunction and compile a nested function into it. */
+  ObjFunction* function = newFunction();
+
+  /* Save the current compiler and chunk, create a new compiler for the
+     nested function, and set it as current. */
+  Compiler fnCompiler;
+  initCompiler(&fnCompiler);
+  fnCompiler.enclosing = current;
+  fnCompiler.function = function;
+
+  /* Start a fresh chunk for the function. */
+  Chunk* previousChunk = compilingChunk;
+  Chunk functionChunk;
+  initChunk(&functionChunk);
+  compilingChunk = &functionChunk;
+
+  /* Begin function scope and add an implicit local slot for the function
+     receiver (not used here but simplifies indexing). */
+  beginScope();
+  /* Parse parameter list. Expect '(' already consumed by caller. */
+  int arity = 0;
+  if (!match(TOKEN_RIGHT_PAREN)) {
+    do {
+      consume(TOKEN_IDENTIFIER, "Expect parameter name.");
+      ObjString* paramName = copyString(parser.previous.start, parser.previous.length);
+      addLocal(parser.previous);
+      markInitialized();
+      arity++;
+      if (arity > 255) error("Can't have more than 255 parameters.");
+    } while (match(TOKEN_COMMA));
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+  }
+  function->arity = arity;
+
+  /* Parse function body. Expect '{' has been consumed by caller (funDeclaration). */
+  consume(TOKEN_LEFT_BRACE, "Expect '{' before function body.");
+  block();
+  /* Copy upvalue descriptor arrays so we can emit them after finishing the
+     nested compiler — endCompiler will free the compiler's arrays. */
+  int collectedUpvalues = fnCompiler.upvalueCount;
+  uint8_t* upIsLocal = NULL;
+  uint8_t* upIndex = NULL;
+  if (collectedUpvalues > 0) {
+    upIsLocal = (uint8_t*)malloc(collectedUpvalues);
+    upIndex = (uint8_t*)malloc(collectedUpvalues);
+    for (int i = 0; i < collectedUpvalues; i++) {
+      upIsLocal[i] = fnCompiler.upvalueIsLocal[i];
+      upIndex[i] = fnCompiler.upvalueIndex[i];
+    }
+  }
+
+  /* Let endCompiler emit the return and free compiler resources for fnCompiler. */
+  endCompiler();
+
+  /* Move compiled chunk into function and restore previous chunk/compiler. */
+  function->chunk = *compilingChunk;
+  compilingChunk = previousChunk;
+  function->upvalueCount = collectedUpvalues;
+
+  /* Emit the function as a constant into the enclosing chunk, then emit the
+     OP_CLOSURE and the copied upvalue descriptors. */
+  emitConstant(OBJ_VAL(function));
+  emitByte(OP_CLOSURE);
+  for (int i = 0; i < collectedUpvalues; i++) {
+    emitByte(upIsLocal[i]);
+    emitByte(upIndex[i]);
+  }
+
+  if (upIsLocal) free(upIsLocal);
+  if (upIndex) free(upIndex);
+
+  /* Restore previous compiler as current (fnCompiler.enclosing). */
+  current = fnCompiler.enclosing;
+
+  return function;
+}
+
+static void funDeclaration(void) {
+  /* Expected: 'fun' identifier '(' params ')' '{' body '}' */
+  consume(TOKEN_IDENTIFIER, "Expect function name.");
+  Token name = parser.previous;
+  int global = identifierConstant(&name);
+
+  /* Compile the function body into a function object. We'll temporarily
+     create a new chunk and swap it into currentChunk via compilingChunk. */
+  beginScope();
+  ObjFunction* function = compileFunction();
+
+  /* Emit the function as a constant and an OP_CLOSURE. */
+  emitConstant(OBJ_VAL(function));
+  emitByte(OP_CLOSURE);
+  /* Emit upvalue descriptors recorded in the compiler: (isLocal, index) pairs. */
+  for (int i = 0; i < current->upvalueCount; i++) {
+    emitByte(current->upvalueIsLocal[i]);
+    emitByte(current->upvalueIndex[i]);
+  }
+
+  /* Define the variable with the function value. */
+  if (global <= UINT8_MAX) {
+    emitBytes(OP_DEFINE_GLOBAL, (uint8_t)global);
+  } else {
+    emitByte(OP_DEFINE_GLOBAL_LONG);
+    emitByte((uint8_t)(global & 0xFF));
+    emitByte((uint8_t)((global >> 8) & 0xFF));
+    emitByte((uint8_t)((global >> 16) & 0xFF));
+  }
+
+  endScope();
 }
 
 /* Statement parsing */
@@ -745,6 +1005,117 @@ static void forStatement() {
   endScope();
 }
 
+static void continueStatement(void) {
+  consume(TOKEN_SEMICOLON, "Expect ';' after 'continue'.");
+  if (current->loopCount == 0) {
+    error("'continue' must be inside a loop.");
+    return;
+  }
+
+  int loopStart = current->loopStarts[current->loopCount - 1];
+  int loopScope = current->loopScopeDepths[current->loopCount - 1];
+
+  /* At runtime we need to pop any locals that were declared inside nested
+     scopes within the loop body before jumping back to the top of the loop.
+     Emit the appropriate number of OP_POPs now (do not modify compile-time
+     local table). */
+  int popCount = 0;
+  for (int i = current->localCount - 1; i >= 0 && current->locals[i].depth > loopScope; i--) {
+    popCount++;
+  }
+  for (int i = 0; i < popCount; i++) emitByte(OP_POP);
+
+  /* Jump back to the loop start. */
+  emitLoop(loopStart);
+}
+
+static void switchStatement(void) {
+  /* switch (expr) { case ... default ... } */
+  consume(TOKEN_LEFT_PAREN, "Expect '(' after 'switch'.");
+  expression();
+  consume(TOKEN_RIGHT_PAREN, "Expect ')' after switch value.");
+
+  consume(TOKEN_LEFT_BRACE, "Expect '{' before switch cases.");
+
+  beginScope();
+  /* Allocate a local slot to store the switch value so we can compare it
+     against each case expression repeatedly. */
+  Token dummyName;
+  static const char* switchName = "__switch";
+  dummyName.start = switchName;
+  dummyName.length = (int)strlen(switchName);
+  addLocal(dummyName);
+  markInitialized();
+  int switchLocal = current->localCount - 1;
+
+  /* Store the evaluated switch value into the local. */
+  emitLocal(OP_SET_LOCAL, OP_SET_LOCAL_LONG, (uint32_t)switchLocal);
+
+  /* We'll collect jumps to the end of the switch for each case body so we can
+     patch them after we've emitted the whole switch. */
+  int* exitJumps = NULL;
+  int exitCount = 0, exitCap = 0;
+
+  while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+    if (match(TOKEN_CASE)) {
+      /* case expression: */
+      /* load switch value */
+      emitLocal(OP_GET_LOCAL, OP_GET_LOCAL_LONG, (uint32_t)switchLocal);
+      expression();
+      consume(TOKEN_COLON, "Expect ':' after case expression.");
+      emitByte(OP_EQUAL);
+
+      /* If not equal, skip this case's body. */
+      int skipCase = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); /* pop the comparison true value for the taken branch */
+
+      /* compile zero or more statements for this case until next case/default/} */
+      while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) && !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+        declaration();
+      }
+
+      /* After finishing this case's body, jump to end of switch to avoid
+         falling through. */
+      int endJump = emitJump(OP_JUMP);
+      /* record endJump */
+      if (exitCount + 1 > exitCap) {
+        int old = exitCap;
+        int newCap = old == 0 ? 8 : old * 2;
+        exitJumps = GROW_ARRAY(int, exitJumps, old, newCap);
+        exitCap = newCap;
+      }
+      exitJumps[exitCount++] = endJump;
+
+      /* patch skipCase and pop the comparison value for the false branch */
+      patchJump(skipCase);
+      emitByte(OP_POP);
+
+    } else if (match(TOKEN_DEFAULT)) {
+      consume(TOKEN_COLON, "Expect ':' after 'default'.");
+      /* compile statements until end or next case (though default should be last)
+         We'll execute default if no previous case matched. */
+      while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) && !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+        declaration();
+      }
+    } else {
+      /* Synchronize/skip unexpected tokens inside switch body. */
+      declaration();
+    }
+  }
+
+  /* Patch all exits to jump here (after switch). */
+  int exitPos = currentChunk()->count;
+  for (int i = 0; i < exitCount; i++) {
+    patchJump(exitJumps[i]);
+  }
+
+  if (exitJumps != NULL) FREE_ARRAY(int, exitJumps, exitCap);
+
+  /* End the scope: this will pop the switch local. */
+  consume(TOKEN_RIGHT_BRACE, "Expect '}' after switch.");
+  endScope();
+}
+
 static void synchronize() {
   parser.panicMode = false;
 
@@ -784,6 +1155,15 @@ static void endCompiler() {
     FREE_ARRAY(Local, current->locals, current->localsCapacity);
     current->locals = NULL;
     current->localsCapacity = 0;
+  }
+  if (current->loopStarts != NULL) {
+    FREE_ARRAY(int, current->loopStarts, current->loopCapacity);
+    current->loopStarts = NULL;
+    current->loopCapacity = 0;
+  }
+  if (current->loopScopeDepths != NULL) {
+    FREE_ARRAY(int, current->loopScopeDepths, current->loopCapacity);
+    current->loopScopeDepths = NULL;
   }
 }
 

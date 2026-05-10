@@ -68,5 +68,62 @@ void printObject(Value value) {
     case OBJ_STRING:
       printf("%s", AS_CSTRING(value));
       break;
+    case OBJ_FUNCTION: {
+      ObjFunction* function = AS_FUNCTION(value);
+      if (function->name == NULL) {
+        printf("<script>");
+      } else {
+        printf("<fn %s>", function->name->chars);
+      }
+      break;
+    }
+    case OBJ_NATIVE:
+      printf("<native fn>");
+      break;
+    case OBJ_CLOSURE: {
+      ObjClosure* closure = AS_CLOSURE(value);
+      if (closure->function->name == NULL) {
+        printf("<script>");
+      } else {
+        printf("<fn %s>", closure->function->name->chars);
+      }
+      break;
+    }
+    case OBJ_UPVALUE:
+      printf("<upvalue>");
+      break;
   }
+}
+
+ObjFunction* newFunction() {
+  ObjFunction* function = (ObjFunction*)allocateObject(sizeof(ObjFunction), OBJ_FUNCTION);
+  function->arity = 0;
+  function->upvalueCount = 0;
+  function->name = NULL;
+  initChunk(&function->chunk);
+  return function;
+}
+
+ObjNative* newNative(NativeFn function) {
+  ObjNative* native = (ObjNative*)allocateObject(sizeof(ObjNative), OBJ_NATIVE);
+  native->function = function;
+  return native;
+}
+
+ObjUpvalue* newUpvalue(Value* slot) {
+  ObjUpvalue* upvalue = (ObjUpvalue*)allocateObject(sizeof(ObjUpvalue), OBJ_UPVALUE);
+  upvalue->location = slot;
+  upvalue->closed = NIL_VAL;
+  upvalue->next = NULL;
+  return upvalue;
+}
+
+ObjClosure* newClosure(ObjFunction* function) {
+  ObjUpvalue** upvalues = ALLOCATE(ObjUpvalue*, function->upvalueCount);
+  for (int i = 0; i < function->upvalueCount; i++) upvalues[i] = NULL;
+  ObjClosure* closure = (ObjClosure*)allocateObject(sizeof(ObjClosure), OBJ_CLOSURE);
+  closure->function = function;
+  closure->upvalues = upvalues;
+  closure->upvalueCount = function->upvalueCount;
+  return closure;
 }
