@@ -9,7 +9,9 @@
 static Obj* allocateObject(size_t size, ObjType type) {
   Obj* object = (Obj*)reallocate(NULL, 0, size);
   object->type = type;
-  object->isMarked = false;
+  // Start "alive" under the current mark sentinel so a GC triggered between
+  // allocation and the object being made reachable doesn't sweep it.
+  object->isMarked = vm.markValue;
   object->next = vm.objects;
   vm.objects = object;
 #ifdef DEBUG_LOG_GC

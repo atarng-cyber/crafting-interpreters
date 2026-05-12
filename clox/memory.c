@@ -88,13 +88,13 @@ static void freeObject(Obj* object) {
 /* MARK PHASE */
 void markObject(Obj* object) {
   if (object == NULL) return;
-  if (object->isMarked) return;
+  if (object->isMarked == vm.markValue) return;
 #ifdef DEBUG_LOG_GC
   printf("%p mark ", (void*)object);
   printValue(OBJ_VAL(object));
   printf("\n");
 #endif
-  object->isMarked = true;
+  object->isMarked = vm.markValue;
 
   if (vm.grayCapacity < vm.grayCount + 1) {
     vm.grayCapacity = GROW_CAPACITY(vm.grayCapacity);
@@ -184,7 +184,8 @@ static void traceReferences() {
 void tableRemoveWhite(Table* table) {
   for (int i = 0; i < table->capacity; i++) {
     Entry* entry = &table->entries[i];
-    if (entry->state == 1 && IS_STRING(entry->key) && !AS_STRING(entry->key)->obj.isMarked) {
+    if (entry->state == 1 && IS_STRING(entry->key) &&
+        AS_STRING(entry->key)->obj.isMarked != vm.markValue) {
       tableDelete(table, entry->key);
     }
   }
@@ -194,8 +195,9 @@ static void sweep() {
   Obj* previous = NULL;
   Obj* object = vm.objects;
   while (object != NULL) {
-    if (object->isMarked) {
-      object->isMarked = false;
+    if (object->isMarked == vm.markValue) {
+      // Alive — leave its mark alone. After this cycle we'll flip vm.markValue
+      // so this object's mark automatically becomes "stale" next cycle.
       previous = object;
       object = object->next;
     } else {
@@ -223,6 +225,10 @@ void collectGarbage() {
   traceReferences();
   tableRemoveWhite(&vm.strings);
   sweep();
+
+  // Flip the mark sentinel: every surviving object's mark now means "stale"
+  // for the next cycle, so we never had to walk the heap to clear marks.
+  vm.markValue = !vm.markValue;
 
 #ifdef DEBUG_LOG_GC
   printf("-- gc end\n");

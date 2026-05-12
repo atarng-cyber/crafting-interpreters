@@ -43,6 +43,10 @@ typedef struct {
   int grayCount;
   int grayCapacity;
   Obj** grayStack;
+
+  // Alternating mark sentinel: an object is alive iff obj->isMarked == markValue.
+  // Flipping this after sweep "unmarks" all live objects in O(1).
+  bool markValue;
 } VM;
 
 extern VM vm;
