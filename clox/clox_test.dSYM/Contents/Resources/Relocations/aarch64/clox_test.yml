@@ -1,5 +1,5 @@
 ---
 triple:          'arm64-apple-darwin'
-binary-path:     '/Users/andrew/Documents/GithubProjects/CS4080 Homework 1/crafting-interpreters/clox/clox_test'
+binary-path:     clox_test
 relocations:     []
 ...

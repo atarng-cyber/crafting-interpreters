@@ -1,0 +1,15 @@
+fun makeClosure() {
+  var a = "data";
+  fun f() { print a; }
+  return f;
+}
+
+var c = makeClosure();
+// Many allocations to provoke GC
+var i = 0;
+while (i < 1000) {
+  var s = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + i;
+  i = i + 1;
+}
+
+c();

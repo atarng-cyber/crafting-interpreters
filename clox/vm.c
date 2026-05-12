@@ -116,8 +116,9 @@ static bool isFalsey(Value value) {
 }
 
 static void concatenate() {
-  ObjString* b = AS_STRING(pop());
-  ObjString* a = AS_STRING(pop());
+  // Keep operands on the stack while we allocate so the GC can find them.
+  ObjString* b = AS_STRING(peek(0));
+  ObjString* a = AS_STRING(peek(1));
 
   int length = a->length + b->length;
   char* chars = ALLOCATE(char, length + 1);
@@ -126,6 +127,8 @@ static void concatenate() {
   chars[length] = '\0';
 
   ObjString* result = takeString(chars, length);
+  pop();
+  pop();
   push(OBJ_VAL(result));
 }
 
@@ -140,12 +143,27 @@ void initVM() {
   resetStack();
   /* initVM: stack tracing removed for normal operation. */
   vm.objects = NULL;
+  vm.chunk = NULL;
+  vm.openUpvalues = NULL;
+  vm.bytesAllocated = 0;
+  vm.nextGC = 1024 * 1024;
+  vm.grayCount = 0;
+  vm.grayCapacity = 0;
+  vm.grayStack = NULL;
   initTable(&vm.globals);
   initTable(&vm.strings);
   /* Register native functions */
   ObjString* name = copyString("clock", 5);
+  /* Protect the new string and the native value while we register it. The
+    allocation of the native or table resizing may trigger GC, and if the
+    native hasn't been inserted into the globals table yet it would be
+    unreachable. Push both so the collector treats them as roots. */
+  push(OBJ_VAL(name));
   ObjNative* native = newNative(native_clock);
+  push(OBJ_VAL(native));
   tableSet(&vm.globals, OBJ_VAL(name), OBJ_VAL(native));
+  pop(); /* pop native */
+  pop(); /* pop name */
 }
 
 void freeVM() {
@@ -505,6 +523,8 @@ InterpretResult interpret(const char* source) {
 
   InterpretResult result = run();
 
+  // Clear vm.chunk before freeing it so the GC won't mark a freed array.
+  vm.chunk = NULL;
   freeChunk(&chunk);
   return result;
 }

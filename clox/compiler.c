@@ -8,6 +8,7 @@
 #include "scanner.h"
 #include "chunk.h"
 #include "table.h"
+#include "vm.h"
 #include "memory.h"
 #include "object.h"
 /* for DEBUG_PRINT_CODE disassembly */
@@ -374,7 +375,12 @@ static void addLocal(Token name) {
     local->prev = (int)AS_NUMBER(prevVal);
   }
 
+  /* Protect the interned string from collection during tableSet which may
+    trigger a GC if the table needs to grow. Push it onto the VM stack so
+    markRoots will find it. */
+  push(OBJ_VAL(interned));
   tableSet(&current->localsTable, OBJ_VAL(interned), NUMBER_VAL(slot));
+  pop();
   current->localCount++;
 }
 
@@ -802,8 +808,14 @@ static ObjFunction* compileFunction(void) {
   /* Save the current compiler and chunk, create a new compiler for the
      nested function, and set it as current. */
   Compiler fnCompiler;
+  /* Preserve the enclosing compiler pointer (the current compiler) before
+    initCompiler sets `current` to the new compiler. If we called
+    initCompiler first and then read `current`, we'd capture the new
+    compiler itself, creating a self-referential cycle that breaks
+    markCompilerRoots. */
+  Compiler* enclosing = current;
   initCompiler(&fnCompiler);
-  fnCompiler.enclosing = current;
+  fnCompiler.enclosing = enclosing;
   fnCompiler.function = function;
 
   /* Start a fresh chunk for the function. */
@@ -881,6 +893,9 @@ static void funDeclaration(void) {
 
   /* Compile the function body into a function object. We'll temporarily
      create a new chunk and swap it into currentChunk via compilingChunk. */
+  /* Expect the '(' that starts the parameter list. compileFunction
+    assumes the '(' has already been consumed by its caller. */
+  consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
   beginScope();
   ObjFunction* function = compileFunction();
 
@@ -1142,6 +1157,11 @@ static void synchronize() {
 }
 
 static void endCompiler() {
+#if 0
+  /* emitReturn will write return bytecode into the current chunk. We
+     perform it before we grab the enclosing pointer because it relies on
+     `current` being valid. */
+#endif
   emitReturn();
 #ifdef DEBUG_PRINT_CODE
   if (!parser.hadError) {
@@ -1149,6 +1169,12 @@ static void endCompiler() {
   }
 #endif
   /* Free resources allocated for locals table/array. */
+  /* Restore the enclosing compiler so `current` doesn't point to a
+     compiler on the C stack after this function returns. Save the
+     enclosing pointer first because we'll use `current` while freeing
+     its resources. */
+  Compiler* enclosing = current->enclosing;
+
   freeTable(&current->localsTable);
   freeTable(&current->globalsImmutable);
   if (current->locals != NULL) {
@@ -1165,6 +1191,10 @@ static void endCompiler() {
     FREE_ARRAY(int, current->loopScopeDepths, current->loopCapacity);
     current->loopScopeDepths = NULL;
   }
+
+  /* Now that we've cleaned up the current compiler, restore the `current`
+     pointer to its enclosing compiler (may be NULL for top-level). */
+  current = enclosing;
 }
 
 bool compile(const char* source, Chunk* chunk) {
@@ -1184,4 +1214,26 @@ bool compile(const char* source, Chunk* chunk) {
 
   endCompiler();
   return !parser.hadError;
+}
+
+void markCompilerRoots() {
+  Compiler* compiler = current;
+  while (compiler != NULL) {
+    if (compiler->function != NULL) markObject((Obj*)compiler->function);
+    for (int i = 0; i < compiler->localCount; i++) {
+      markObject((Obj*)compiler->locals[i].name);
+    }
+    markTable(&compiler->localsTable);
+    markTable(&compiler->globalsImmutable);
+    compiler = compiler->enclosing;
+  }
+
+  // The chunk currently being compiled isn't reachable through any ObjFunction
+  // for top-level script code, so mark its constants directly to prevent the
+  // compiler's recently-added constants from being collected mid-compile.
+  if (current != NULL && compilingChunk != NULL) {
+    for (int i = 0; i < compilingChunk->constants.count; i++) {
+      markValue(compilingChunk->constants.values[i]);
+    }
+  }
 }

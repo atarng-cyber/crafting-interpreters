@@ -2,7 +2,10 @@
 #define clox_memory_h
 
 #include "common.h"
-
+/* Include object and value definitions used in GC APIs. */
+#include "object.h"
+#include "value.h"
+ 
 #define GROW_CAPACITY(capacity) \
     ((capacity) < 8 ? 8 : (capacity) * 2)
 
@@ -19,6 +22,11 @@
 #define FREE(type, pointer) reallocate(pointer, sizeof(type), 0)
 
 void* reallocate(void* pointer, size_t oldSize, size_t newSize);
+void collectGarbage();
+void markObject(Obj* object);
+void markValue(Value value);
+#include "object.h"
+#include "value.h"
 void freeObjects();
 
 #endif

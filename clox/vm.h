@@ -37,6 +37,12 @@ typedef struct {
   Table strings;
 
   ObjUpvalue* openUpvalues; /* linked list of open upvalues */
+  size_t bytesAllocated;
+  size_t nextGC;
+
+  int grayCount;
+  int grayCapacity;
+  Obj** grayStack;
 } VM;
 
 extern VM vm;
